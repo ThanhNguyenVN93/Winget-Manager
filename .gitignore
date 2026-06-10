@@ -1,0 +1,40 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docview
+
+# NuGet packages (restored on build — do not commit)
+packages/
+!packages/repositories.config
+*.nupkg
+*.snupkg
+
+# Rider / JetBrains
+.idea/
+
+# ReSharper
+_ReSharper*/
+*.DotSettings.user
+
+# Test results
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Logs written at runtime
+*.log
+*.txt
+
+# Publish output
+publish/
