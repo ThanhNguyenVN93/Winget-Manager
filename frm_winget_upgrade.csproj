@@ -60,6 +60,13 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AppSettings.cs" />
+    <Compile Include="DonateSettings.cs" />
+    <Compile Include="frmDonate.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="frmDonate.Designer.cs">
+      <DependentUpon>frmDonate.cs</DependentUpon>
+    </Compile>
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -92,6 +99,13 @@
     <!-- Embed icon for runtime form-title loading -->
     <EmbeddedResource Include="winget_manager.ico">
       <LogicalName>frm_winget_upgrade.winget_manager.ico</LogicalName>
+    </EmbeddedResource>
+    <!-- Embed donate QR images so the EXE runs standalone -->
+    <EmbeddedResource Include="tcb.jpg">
+      <LogicalName>frm_winget_upgrade.tcb.jpg</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="momo.jpg">
+      <LogicalName>frm_winget_upgrade.momo.jpg</LogicalName>
     </EmbeddedResource>
     <None Include="app.manifest" />
     <None Include="packages.config" />

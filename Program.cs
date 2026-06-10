@@ -17,12 +17,32 @@ namespace frm_winget_upgrade
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            if (!IsOsSupported())
+            {
+                MessageBox.Show(
+                    "Winget Manager requires Windows 10 version 1903 (Build 18362) or later.\n\n" +
+                    "This requirement exists because the app depends on the Windows Package Manager " +
+                    "(winget CLI), which is only available on Windows 10 1903+ and Windows 11.",
+                    "Unsupported Operating System",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                Environment.Exit(0);
+                return;
+            }
+
             Application.ThreadException               += (s, e) => ShowFatalError(e.Exception);
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 { if (e.ExceptionObject is Exception ex) ShowFatalError(ex); };
 
             try { Application.Run(new Form1()); }
             catch (Exception ex) { ShowFatalError(ex); }
+        }
+
+        private static bool IsOsSupported()
+        {
+            // Windows 10 1903 = 10.0.18362 | Windows 11 = 10.0.22000+
+            var v = Environment.OSVersion.Version;
+            return v.Major == 10 && v.Build >= 18362;
         }
 
         private static Assembly ResolveEmbeddedAssembly(object sender, ResolveEventArgs args)

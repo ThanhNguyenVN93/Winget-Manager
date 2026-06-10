@@ -217,7 +217,7 @@ namespace frm_winget_upgrade
             this.navLogs.Name = "navLogs";
             this.navLogs.Size = new System.Drawing.Size(184, 36);
             this.navLogs.TabIndex = 4;
-            this.navLogs.Text = "📄  Logs";
+            this.navLogs.Text = "🐛  Errors Report";
             // 
             // mainContentPanel
             // 

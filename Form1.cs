@@ -98,18 +98,24 @@ namespace frm_winget_upgrade
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
-            if (!_isBusy) return;
+            if (_isBusy)
+            {
+                var choice = MessageBox.Show(
+                    "Tác vụ đang diễn ra. Bạn có chắc chắn muốn thoát?",
+                    "Đang thực thi",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
 
-            var choice = MessageBox.Show(
-                "Tác vụ đang diễn ra. Bạn có chắc chắn muốn thoát?",
-                "Đang thực thi",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning,
-                MessageBoxDefaultButton.Button2);
+                if (choice == DialogResult.No) { e.Cancel = true; return; }
+                _cts?.Cancel();
+            }
 
-            if (choice == DialogResult.No) { e.Cancel = true; return; }
-
-            _cts?.Cancel();
+            if (!DonateSettings.DontShowAgain)
+            {
+                using (var donateForm = new frmDonate())
+                    donateForm.ShowDialog(this);
+            }
         }
 
         private static bool IsRunningAsAdministrator()
@@ -258,7 +264,7 @@ namespace frm_winget_upgrade
             WireNavButton(navInstalled, "Installed Packages", "Manage and update your Windows packages");
             WireNavButton(navUpdates,   "Available Updates",  "Packages ready for update");
             WireNavButton(navSettings,  "Settings",           "Configure Winget Manager preferences");
-            WireNavButton(navLogs,      "Logs",               "View detailed operation logs");
+            navLogs.Click += (s, e) => Process.Start(new ProcessStartInfo("https://www.facebook.com/thanhitma9x") { UseShellExecute = true });
 
             int btnX = overallProgress.Right + ThemeConstants.Spacing8;
             int btnW = mainContentPanel.ClientSize.Width - ThemeConstants.Spacing12 - btnX;
@@ -1180,10 +1186,13 @@ namespace frm_winget_upgrade
             foreach (var btn in new[] { navDashboard, navInstalled, navUpdates, navSettings, navLogs })
             {
                 btn.FillColor = Color.Transparent;
-                btn.ForeColor = ThemeColors.SecondaryText;
+                btn.ForeColor = btn == navLogs ? Color.FromArgb(80, 140, 255) : ThemeColors.SecondaryText;
             }
-            active.FillColor = ThemeColors.HoverBlue;
-            active.ForeColor = ThemeColors.ElectricBlue;
+            if (active != navLogs)
+            {
+                active.FillColor = ThemeColors.HoverBlue;
+                active.ForeColor = ThemeColors.ElectricBlue;
+            }
         }
 
         // ── Sidebar ───────────────────────────────────────────────────────────
@@ -1213,7 +1222,7 @@ namespace frm_winget_upgrade
                 ("📦  Installed", navInstalled),
                 ("⬆️  Updates",   navUpdates),
                 ("⚙️  Settings",  navSettings),
-                ("📄  Logs",      navLogs)
+                ("🐛  Errors Report", navLogs)
             };
 
             foreach (var (text, btn) in labels)
