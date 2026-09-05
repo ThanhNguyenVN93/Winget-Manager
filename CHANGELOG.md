@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.0] — 2026-07-07
+
+### Added
+- **Microsoft Store app updates** — Check for Updates now also scans `winget upgrade --source msstore`, so Store-sourced apps show up alongside regular winget packages
+- Upgrading a Store-sourced package automatically appends `--source msstore` to the upgrade command (works for single-package and multi-select upgrades)
+- **In-app self-update** — checks GitHub Releases for a newer version on startup, plus a manual "Check for App Updates" button in Settings; downloads and installs the new version automatically, no manual download required
+
+### Fixed
+- Installed Packages grid: the dimmed/read-only styling for "Local Registry" rows could be lost after sorting a column — styling is now recalculated per-row on every paint so it survives sorting
+
+### Changed
+- Release builds now produce a single `WingetManager.exe` with no companion `.pdb` or `.exe.config` file
+
+---
+
 ## [1.0.0] — 2026-06-10
 
 ### Added

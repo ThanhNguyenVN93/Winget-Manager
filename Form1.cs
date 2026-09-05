@@ -30,7 +30,8 @@ namespace frm_winget_upgrade
         private const int LOG_MAX_LINES  = 1000;
         private const int LOG_KEEP_LINES = 500;
 
-        private readonly WingetService       _service     = new WingetService();
+        private readonly WingetService       _service       = new WingetService();
+        private readonly UpdateService       _updateService = new UpdateService();
         private          List<WingetPackage> _allPackages = new List<WingetPackage>();
         private          Guna2Button         _btnAction;   // upgrade or uninstall depending on view
         private          bool                _sidebarCollapsed;
@@ -88,6 +89,7 @@ namespace frm_winget_upgrade
                 EnableGridDoubleBuffering(packagesGrid);
                 SetupEventHandlers();
                 await ScanForUpdatesAsync();
+                _ = CheckForAppUpdateAsync(silent: true);
             }
             catch (Exception ex)
             {
@@ -259,6 +261,7 @@ namespace frm_winget_upgrade
             packagesGrid.ColumnHeaderMouseClick       += PackagesGrid_HeaderClick;
             packagesGrid.CurrentCellDirtyStateChanged += PackagesGrid_CurrentCellDirtyStateChanged;
             packagesGrid.CellValueChanged             += PackagesGrid_CellValueChanged;
+            packagesGrid.CellFormatting                += PackagesGrid_CellFormatting;
 
             WireNavButton(navDashboard, "Dashboard",          "Overview of your package management system");
             WireNavButton(navInstalled, "Installed Packages", "Manage and update your Windows packages");
@@ -390,6 +393,54 @@ namespace frm_winget_upgrade
             }
         }
 
+        // ── App self-update ───────────────────────────────────────────────────
+
+        private async Task CheckForAppUpdateAsync(bool silent)
+        {
+            UpdateInfo info;
+            try
+            {
+                info = await _updateService.CheckForUpdateAsync();
+            }
+            catch (Exception ex)
+            {
+                if (!silent) AddLogEntry($"Update check failed: {ex.Message}", ThemeColors.ErrorRed);
+                return;
+            }
+
+            if (info == null)
+            {
+                if (!silent) AddLogEntry("You're running the latest version.", ThemeColors.SuccessGreen);
+                return;
+            }
+
+            var choice = MessageBox.Show(
+                $"A new version is available: {info.TagName}\n\n" +
+                "Download and install it now? The app will restart automatically.",
+                "Update Available",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information,
+                MessageBoxDefaultButton.Button1);
+
+            if (choice != DialogResult.Yes)
+            {
+                AddLogEntry($"Update {info.TagName} available — postponed.", ThemeColors.WarningOrange);
+                return;
+            }
+
+            AddLogEntry($"Downloading update {info.TagName}…", ThemeColors.InfoBlue);
+            try
+            {
+                await _updateService.DownloadAndApplyUpdateAsync(info, new Progress<int>(UpdateProgress));
+            }
+            catch (Exception ex)
+            {
+                AddLogEntry($"Update failed: {ex.Message}", ThemeColors.ErrorRed);
+                MessageBox.Show($"Update failed:\n\n{ex.Message}", "Update Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         // ── Load installed packages ───────────────────────────────────────────
 
         private async Task LoadInstalledPackagesAsync(CancellationToken ct = default)
@@ -461,30 +512,35 @@ namespace frm_winget_upgrade
             packagesGrid.Rows.Clear();
             foreach (var pkg in packages)
             {
-                bool isLocal = pkg.Source == "Local Registry";
                 int idx = packagesGrid.Rows.Add(false, pkg.Name, pkg.Id,
                                                 pkg.InstalledVersion, pkg.Source);
 
-                // Disable checkbox for local-registry rows — no winget ID to uninstall against.
+                // Set immediately (not only in CellFormatting) so a row never scrolled
+                // into view is still protected against "select all" ticking its checkbox.
                 var checkCell = packagesGrid.Rows[idx].Cells[COL_SELECT] as DataGridViewCheckBoxCell;
-                if (checkCell != null && isLocal)
-                {
+                if (checkCell != null && pkg.Source == "Local Registry")
                     checkCell.ReadOnly = true;
-                    checkCell.Style.BackColor = Color.FromArgb(40, 40, 40);
-                    checkCell.Style.ForeColor = Color.FromArgb(70, 70, 70);
-                }
-
-                // Dim the entire row for local packages.
-                if (isLocal)
-                {
-                    foreach (DataGridViewCell cell in packagesGrid.Rows[idx].Cells)
-                    {
-                        cell.Style.ForeColor = Color.FromArgb(90, 90, 90);
-                    }
-                }
             }
 
             packagesGrid.Columns[COL_SELECT].HeaderText = "✓";
+        }
+
+        // Colours are derived from each row's own Source cell on every paint, rather than
+        // set once at Add time, so dimming survives column sort reordering the rows.
+        private void PackagesGrid_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
+        {
+            if (_activeView != "Installed Packages") return;
+            if (e.RowIndex < 0 || e.RowIndex >= packagesGrid.Rows.Count) return;
+
+            var row      = packagesGrid.Rows[e.RowIndex];
+            bool isLocal = string.Equals(row.Cells[COL_SOURCE].Value?.ToString(), "Local Registry", StringComparison.Ordinal);
+            if (!isLocal) return;
+
+            if (e.ColumnIndex == COL_SELECT)
+                e.CellStyle.BackColor = Color.FromArgb(40, 40, 40);
+            e.CellStyle.ForeColor = e.ColumnIndex == COL_SELECT
+                ? Color.FromArgb(70, 70, 70)
+                : Color.FromArgb(90, 90, 90);
         }
 
         private void ApplyStatusCellStyle(int rowIndex, string text, Color back, Color fore)
@@ -613,7 +669,7 @@ namespace frm_winget_upgrade
 
                     AddLogEntry($"→ {pkg.Name}  [{pkg.Id}]", ThemeColors.InfoBlue);
 
-                    bool ok = await _service.UpgradePackageAsync(pkg.Id, token, new Progress<string>(AppendRawLog));
+                    bool ok = await _service.UpgradePackageAsync(pkg.Id, pkg.Source, token, new Progress<string>(AppendRawLog));
 
                     if (token.IsCancellationRequested) { wasCancelled = true; break; }
 
@@ -648,6 +704,14 @@ namespace frm_winget_upgrade
             }
 
             FinishBulkOperation("upgrade", succeeded, failed, wasCancelled, targets.Count);
+
+            if (!wasCancelled && succeeded > 0)
+            {
+                _viewLoadCts?.Cancel();
+                _viewLoadCts?.Dispose();
+                _viewLoadCts = new CancellationTokenSource();
+                await ScanForUpdatesAsync(_viewLoadCts.Token);
+            }
         }
 
         // ── Uninstall selected packages ───────────────────────────────────────
@@ -737,15 +801,18 @@ namespace frm_winget_upgrade
 
         // ── Shared bulk-operation helpers ─────────────────────────────────────
 
-        private List<(string Id, string Name)> GetSelectedTargets() =>
-            packagesGrid.Rows
-                .Cast<DataGridViewRow>()
-                .Where(r => r.Cells[COL_SELECT].Value is true && !r.Cells[COL_SELECT].ReadOnly)
-                .Select(r => (
-                    Id:   r.Cells[COL_ID].Value?.ToString()   ?? string.Empty,
-                    Name: r.Cells[COL_NAME].Value?.ToString() ?? string.Empty))
-                .Where(x => !string.IsNullOrWhiteSpace(x.Id))
-                .ToList();
+        private List<WingetPackage> GetSelectedTargets()
+        {
+            var selectedIds = new HashSet<string>(
+                packagesGrid.Rows
+                    .Cast<DataGridViewRow>()
+                    .Where(r => r.Cells[COL_SELECT].Value is true && !r.Cells[COL_SELECT].ReadOnly)
+                    .Select(r => r.Cells[COL_ID].Value?.ToString() ?? string.Empty)
+                    .Where(id => !string.IsNullOrWhiteSpace(id)),
+                StringComparer.OrdinalIgnoreCase);
+
+            return _allPackages.Where(p => selectedIds.Contains(p.Id)).ToList();
+        }
 
         private void FinishBulkOperation(string verb, int succeeded, int failed,
                                           bool wasCancelled, int total)
@@ -1141,6 +1208,17 @@ namespace frm_winget_upgrade
                 AddLogEntry("Log history cleared.", ThemeColors.InfoBlue);
             };
             _settingsPanel.Controls.Add(btnClearLog);
+            y += 42;
+
+            var btnCheckAppUpdate = BuildSettingsButton("⬆️  Check for App Updates", new Point(0, y));
+            btnCheckAppUpdate.Click += async (s, e) =>
+            {
+                btnCheckAppUpdate.Enabled = false;
+                AddLogEntry("Checking for app updates…", ThemeColors.InfoBlue);
+                await CheckForAppUpdateAsync(silent: false);
+                if (!IsDisposed) btnCheckAppUpdate.Enabled = true;
+            };
+            _settingsPanel.Controls.Add(btnCheckAppUpdate);
 
             mainContentPanel.Controls.Add(_settingsPanel);
         }

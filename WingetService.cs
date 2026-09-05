@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -81,8 +82,23 @@ namespace frm_winget_upgrade
 
         public async Task<List<WingetPackage>> GetAvailableUpdatesAsync(CancellationToken cancellationToken = default)
         {
-            string raw = await RunCommandAsync("upgrade --accept-source-agreements");
-            return ParseUpgradeOutput(raw, cancellationToken);
+            string raw     = await RunCommandAsync("upgrade --accept-source-agreements");
+            var    updates = ParseUpgradeOutput(raw, cancellationToken);
+
+            // msstore updates are sometimes dropped from the combined multi-source scan above —
+            // query the source explicitly and merge in anything not already found.
+            string rawMsStore     = await RunCommandAsync("upgrade --source msstore --accept-source-agreements");
+            var    msStoreUpdates = ParseUpgradeOutput(rawMsStore, cancellationToken);
+
+            var seenIds = new HashSet<string>(updates.Select(p => p.Id), StringComparer.OrdinalIgnoreCase);
+            foreach (var pkg in msStoreUpdates)
+            {
+                if (seenIds.Contains(pkg.Id)) continue;
+                pkg.Source = "msstore";
+                updates.Add(pkg);
+            }
+
+            return updates;
         }
 
         private List<WingetPackage> ParseUpgradeOutput(string raw, CancellationToken cancellationToken = default)
@@ -119,6 +135,9 @@ namespace frm_winget_upgrade
                 string available = posSource > 0
                     ? Slice(line, posAvailable, posSource)
                     : Slice(line, posAvailable, line.Length);
+                string source    = (posSource > 0 && line.Length > posSource)
+                    ? Slice(line, posSource, line.Length)
+                    : string.Empty;
 
                 if (string.IsNullOrWhiteSpace(id)) continue;
                 if (string.Equals(id.Trim(), "Microsoft.Edge", StringComparison.OrdinalIgnoreCase)) continue;
@@ -128,7 +147,8 @@ namespace frm_winget_upgrade
                     Name             = name.Trim(),
                     Id               = id.Trim(),
                     InstalledVersion = version.Trim(),
-                    AvailableVersion = available.Trim()
+                    AvailableVersion = available.Trim(),
+                    Source           = source.Trim()
                 });
             }
 
@@ -323,15 +343,20 @@ namespace frm_winget_upgrade
         // ── Upgrade ───────────────────────────────────────────────────────────
 
         public async Task<bool> UpgradePackageAsync(string packageId,
+                                                     string source,
                                                      CancellationToken cancellationToken = default,
                                                      IProgress<string> progress = null)
         {
             var args = new StringBuilder($"upgrade --id \"{packageId}\"");
+            if (IsMsStoreSource(source))      args.Append(" --source msstore");
             if (AppSettings.SilentMode)       args.Append(" --silent");
             if (AppSettings.ForceInstall)     args.Append(" --force");
             if (AppSettings.AcceptAgreements) args.Append(" --accept-package-agreements --accept-source-agreements");
             return await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
         }
+
+        private static bool IsMsStoreSource(string source) =>
+            string.Equals(source, "msstore", StringComparison.OrdinalIgnoreCase);
 
         // ── Uninstall ─────────────────────────────────────────────────────────
 
