@@ -17,6 +17,10 @@ namespace frm_winget_upgrade
         public string AvailableVersion { get; set; } = string.Empty;
         public string Source           { get; set; } = string.Empty;
 
+        // Non-empty when the package Id names a fixed version line (e.g. OpenJS.NodeJS.22) —
+        // its updates stay within that line, so it's excluded from "Select All" by default.
+        public string Track { get; set; } = string.Empty;
+
         // Mutable runtime status — kept in sync with the grid cell so that
         // row-visibility filtering never loses live state mid-upgrade.
         public string CurrentStatus { get; set; } = "⬆ Update Available";
@@ -41,6 +45,13 @@ namespace frm_winget_upgrade
         private static readonly Regex GuidId = new Regex(
             @"^\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?$",
             RegexOptions.Compiled);
+
+        // Id ends in a numeric version segment (OpenJS.NodeJS.22, Python.Python.3.12) —
+        // winget already confines that package's upgrades to the same line.
+        private static readonly Regex VersionLockedId = new Regex(
+            @"\.\d+(\.\d+){0,2}$", RegexOptions.Compiled);
+
+        private const int FallbackRecheckConcurrency = 6;
 
         // ── Raw command runner ────────────────────────────────────────────────
 
@@ -80,7 +91,8 @@ namespace frm_winget_upgrade
 
         // ── Available updates ─────────────────────────────────────────────────
 
-        public async Task<List<WingetPackage>> GetAvailableUpdatesAsync(CancellationToken cancellationToken = default)
+        public async Task<List<WingetPackage>> GetAvailableUpdatesAsync(CancellationToken cancellationToken = default,
+                                                                          IProgress<string> progress = null)
         {
             string raw     = await RunCommandAsync("upgrade --accept-source-agreements");
             var    updates = ParseUpgradeOutput(raw, cancellationToken);
@@ -96,9 +108,66 @@ namespace frm_winget_upgrade
                 if (seenIds.Contains(pkg.Id)) continue;
                 pkg.Source = "msstore";
                 updates.Add(pkg);
+                seenIds.Add(pkg.Id);
             }
 
+            await RecheckMissedUpdatesAsync(updates, seenIds, progress, cancellationToken);
+
+            foreach (var pkg in updates)
+                pkg.Track = VersionLockedId.IsMatch(pkg.Id) ? "Version-locked" : string.Empty;
+
             return updates;
+        }
+
+        // The bulk "upgrade" scan silently drops a package when winget's own name-matching
+        // finds several candidates for it (e.g. multiple "qBittorrent" listings in the source) —
+        // it doesn't error, it just omits the row. Re-querying that exact Id alone sidesteps
+        // the ambiguity and recovers the update if one actually exists. This also covers
+        // packages winget only knows locally through their ARP registry key (no dotted winget
+        // Id, Source blank) — e.g. qBittorrent installed by its own installer rather than
+        // winget — where the bulk scan's internal catalog match can fail silently the same way;
+        // those have no queryable Id, so they're re-queried by display name instead.
+        private async Task RecheckMissedUpdatesAsync(List<WingetPackage> updates, HashSet<string> seenIds,
+                                                       IProgress<string> progress, CancellationToken cancellationToken)
+        {
+            string rawInstalled = await RunCommandAsync("list --accept-source-agreements");
+            var    installed    = ParseInstalledOutput(rawInstalled, cancellationToken);
+
+            var toRecheck = installed
+                .Where(p => !seenIds.Contains(p.Id) && !string.IsNullOrWhiteSpace(p.Name))
+                .ToList();
+
+            if (toRecheck.Count == 0) return;
+
+            progress?.Report($"Deep-checking {toRecheck.Count} package(s) individually — this can take a bit…");
+
+            using (var gate = new SemaphoreSlim(FallbackRecheckConcurrency))
+            {
+                var tasks = toRecheck.Select(async pkg =>
+                {
+                    await gate.WaitAsync(cancellationToken);
+                    try
+                    {
+                        string query = pkg.Source != "Local Registry"
+                            ? $"list --id \"{pkg.Id}\" --exact --accept-source-agreements"
+                            : $"list \"{pkg.Name}\" --accept-source-agreements";
+                        string raw = await RunCommandAsync(query);
+                        return ParseUpgradeOutput(raw, cancellationToken);
+                    }
+                    finally
+                    {
+                        gate.Release();
+                    }
+                });
+
+                var foundLists = await Task.WhenAll(tasks);
+
+                foreach (var pkg in foundLists.SelectMany(list => list))
+                {
+                    if (!seenIds.Add(pkg.Id)) continue;
+                    updates.Add(pkg);
+                }
+            }
         }
 
         private List<WingetPackage> ParseUpgradeOutput(string raw, CancellationToken cancellationToken = default)

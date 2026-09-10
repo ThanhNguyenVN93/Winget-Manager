@@ -33,6 +33,7 @@ namespace frm_winget_upgrade
         private System.Windows.Forms.Label                lblTitle;
         private System.Windows.Forms.Label                lblSubtitle;
         private System.Windows.Forms.Label                lblProgressLabel;
+        private System.Windows.Forms.Label                lblElapsed;
         private System.Windows.Forms.Label                lblLogOutput;
 
         private void InitializeComponent()
@@ -61,6 +62,7 @@ namespace frm_winget_upgrade
             this.searchBox = new Guna.UI2.WinForms.Guna2TextBox();
             this.packagesGrid = new Guna.UI2.WinForms.Guna2DataGridView();
             this.lblProgressLabel = new System.Windows.Forms.Label();
+            this.lblElapsed = new System.Windows.Forms.Label();
             this.updateProgressBar = new Guna.UI2.WinForms.Guna2ProgressBar();
             this.overallProgress = new Guna.UI2.WinForms.Guna2CircleProgressBar();
             this.lblLogOutput = new System.Windows.Forms.Label();
@@ -226,6 +228,7 @@ namespace frm_winget_upgrade
             this.mainContentPanel.Controls.Add(this.searchBox);
             this.mainContentPanel.Controls.Add(this.packagesGrid);
             this.mainContentPanel.Controls.Add(this.lblProgressLabel);
+            this.mainContentPanel.Controls.Add(this.lblElapsed);
             this.mainContentPanel.Controls.Add(this.updateProgressBar);
             this.mainContentPanel.Controls.Add(this.overallProgress);
             this.mainContentPanel.Controls.Add(this.lblLogOutput);
@@ -419,7 +422,20 @@ namespace frm_winget_upgrade
             this.lblProgressLabel.Size = new System.Drawing.Size(55, 15);
             this.lblProgressLabel.TabIndex = 3;
             this.lblProgressLabel.Text = "Progress";
-            // 
+            //
+            // lblElapsed
+            //
+            this.lblElapsed.AutoSize = true;
+            this.lblElapsed.BackColor = System.Drawing.Color.Transparent;
+            this.lblElapsed.Font = new System.Drawing.Font("Segoe UI", 8.5F, System.Drawing.FontStyle.Bold);
+            this.lblElapsed.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(217)))), ((int)(((byte)(255)))));
+            this.lblElapsed.Location = new System.Drawing.Point(624, 400);
+            this.lblElapsed.Name = "lblElapsed";
+            this.lblElapsed.Size = new System.Drawing.Size(40, 15);
+            this.lblElapsed.TabIndex = 3;
+            this.lblElapsed.Text = "00:00";
+            this.lblElapsed.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+            //
             // updateProgressBar
             // 
             this.updateProgressBar.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(45)))), ((int)(((byte)(45)))), ((int)(((byte)(45)))));

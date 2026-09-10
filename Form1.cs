@@ -24,7 +24,8 @@ namespace frm_winget_upgrade
         private const int COL_ID        = 2;
         private const int COL_VERSION   = 3;
         private const int COL_AVAILABLE = 4;
-        private const int COL_STATUS    = 5;   // Updates view
+        private const int COL_TRACK     = 5;   // Updates view
+        private const int COL_STATUS    = 6;   // Updates view
         private const int COL_SOURCE    = 4;   // Installed view (reuses slot 4)
 
         private const int LOG_MAX_LINES  = 1000;
@@ -48,6 +49,8 @@ namespace frm_winget_upgrade
 
         private readonly System.Windows.Forms.Timer _resizeDebounce;
         private readonly System.Windows.Forms.Timer _searchDebounce;
+        private readonly System.Windows.Forms.Timer _elapsedTimer;
+        private          DateTime                   _elapsedStartedAt;
 
         public Form1()
         {
@@ -59,6 +62,8 @@ namespace frm_winget_upgrade
             _resizeDebounce.Tick += ResizeDebounce_Tick;
             _searchDebounce       = new System.Windows.Forms.Timer { Interval = 200 };
             _searchDebounce.Tick += SearchDebounce_Tick;
+            _elapsedTimer         = new System.Windows.Forms.Timer { Interval = 1000 };
+            _elapsedTimer.Tick   += ElapsedTimer_Tick;
             this.Load        += Form1_Load;
             this.Resize      += Form1_Resize;
             this.FormClosing += Form1_FormClosing;
@@ -192,6 +197,7 @@ namespace frm_winget_upgrade
                 new { H = "ID",        W = 180, Fill = false },
                 new { H = "Version",   W =  90, Fill = false },
                 new { H = "Available", W =  90, Fill = false },
+                new { H = "Track",     W = 120, Fill = false },
                 new { H = "Status",    W = 100, Fill = true  }
             };
 
@@ -363,7 +369,8 @@ namespace frm_winget_upgrade
 
             try
             {
-                var packages = await _service.GetAvailableUpdatesAsync(ct);
+                var progress = new Progress<string>(line => AddLogEntry(line, ThemeColors.InfoBlue));
+                var packages = await _service.GetAvailableUpdatesAsync(ct, progress);
 
                 if (_activeView != viewAtStart) return;
 
@@ -495,10 +502,13 @@ namespace frm_winget_upgrade
             packagesGrid.Rows.Clear();
             foreach (var pkg in packages)
             {
-                var (back, fore) = GetStatusColors(pkg.CurrentStatus);
+                var (back, fore)  = GetStatusColors(pkg.CurrentStatus);
+                bool   isLocked   = !string.IsNullOrEmpty(pkg.Track);
+                string trackText  = isLocked ? "🔒 Version-locked" : string.Empty;
+
                 int idx = packagesGrid.Rows.Add(false, pkg.Name, pkg.Id,
                                                 pkg.InstalledVersion, pkg.AvailableVersion,
-                                                pkg.CurrentStatus);
+                                                trackText, pkg.CurrentStatus);
                 ApplyStatusCellStyle(idx, pkg.CurrentStatus, back, fore);
             }
 
@@ -584,13 +594,13 @@ namespace frm_winget_upgrade
 
             bool allChecked = packagesGrid.Rows
                 .Cast<DataGridViewRow>()
-                .Where(r => r.Visible && !r.Cells[COL_SELECT].ReadOnly)
+                .Where(r => r.Visible && !r.Cells[COL_SELECT].ReadOnly && !IsVersionLockedRow(r))
                 .All(r => r.Cells[COL_SELECT].Value is true);
 
             bool newState = !allChecked;
             foreach (DataGridViewRow row in packagesGrid.Rows)
             {
-                if (row.Visible && !row.Cells[COL_SELECT].ReadOnly)
+                if (row.Visible && !row.Cells[COL_SELECT].ReadOnly && !IsVersionLockedRow(row))
                     row.Cells[COL_SELECT].Value = newState;
             }
 
@@ -598,6 +608,13 @@ namespace frm_winget_upgrade
             packagesGrid.RefreshEdit();
             UpdateActionButtonEnabled();
         }
+
+        // Version-locked packages (e.g. Node's LTS line) are left out of "Select All" so a
+        // bulk upgrade doesn't silently bump a track the user pinned to — they can still be
+        // ticked individually. Only the Updates view has a Track column to check.
+        private bool IsVersionLockedRow(DataGridViewRow row) =>
+            _activeView == "Available Updates" &&
+            !string.IsNullOrEmpty(row.Cells[COL_TRACK].Value?.ToString());
 
         // ── Search / filter ───────────────────────────────────────────────────
 
@@ -924,6 +941,27 @@ namespace frm_winget_upgrade
             btnRefresh.Enabled      = enabled;
             searchBox.Enabled       = enabled;
             packagesGrid.Enabled    = enabled;
+
+            // Every long-running operation (scan, load, upgrade, uninstall) brackets itself
+            // with SetControlsEnabled(false)/(true) — one place to drive the elapsed clock.
+            if (!enabled)
+            {
+                _elapsedStartedAt = DateTime.Now;
+                lblElapsed.Text   = "00:00";
+                _elapsedTimer.Start();
+            }
+            else
+            {
+                _elapsedTimer.Stop();
+            }
+        }
+
+        private void ElapsedTimer_Tick(object sender, EventArgs e)
+        {
+            var elapsed = DateTime.Now - _elapsedStartedAt;
+            lblElapsed.Text = elapsed.TotalHours >= 1
+                ? elapsed.ToString(@"hh\:mm\:ss")
+                : elapsed.ToString(@"mm\:ss");
         }
 
         private void SetActionEnabled(bool enabled)
@@ -1208,6 +1246,26 @@ namespace frm_winget_upgrade
                 AddLogEntry("Log history cleared.", ThemeColors.InfoBlue);
             };
             _settingsPanel.Controls.Add(btnClearLog);
+            y += 42;
+
+            var btnOpenLog = BuildSettingsButton("📄  Open Log File", new Point(0, y));
+            btnOpenLog.Click += (s, e) =>
+            {
+                try
+                {
+                    if (!File.Exists(_logFilePath))
+                    {
+                        AddLogEntry("No log file yet — nothing has been written this run.", ThemeColors.InfoBlue);
+                        return;
+                    }
+                    Process.Start(new ProcessStartInfo(_logFilePath) { UseShellExecute = true });
+                }
+                catch (Exception ex)
+                {
+                    AddLogEntry($"Could not open log file: {ex.Message}", ThemeColors.ErrorRed);
+                }
+            };
+            _settingsPanel.Controls.Add(btnOpenLog);
             y += 42;
 
             var btnCheckAppUpdate = BuildSettingsButton("⬆️  Check for App Updates", new Point(0, y));
