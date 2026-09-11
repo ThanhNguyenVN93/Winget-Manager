@@ -117,12 +117,6 @@ namespace frm_winget_upgrade
                 if (choice == DialogResult.No) { e.Cancel = true; return; }
                 _cts?.Cancel();
             }
-
-            if (!DonateSettings.DontShowAgain)
-            {
-                using (var donateForm = new frmDonate())
-                    donateForm.ShowDialog(this);
-            }
         }
 
         private static bool IsRunningAsAdministrator()
@@ -171,7 +165,7 @@ namespace frm_winget_upgrade
                     mainContentPanel.ClientSize.Width  - 24,
                     mainContentPanel.ClientSize.Height - 105 - 12);
             else if (_activeView == "Settings" && _settingsPanel != null)
-                _settingsPanel.Size = new Size(mainContentPanel.ClientSize.Width - 24, 360);
+                _settingsPanel.Size = new Size(mainContentPanel.ClientSize.Width - 24, 420);
         }
 
         // ── Grid initialisation ───────────────────────────────────────────────
@@ -1143,7 +1137,7 @@ namespace frm_winget_upgrade
             logOutput.Size        = new Size(mainContentPanel.ClientSize.Width - 24, 104);
 
             if (_settingsPanel == null) BuildSettingsPanel();
-            _settingsPanel.Size    = new Size(mainContentPanel.ClientSize.Width - 24, 360);
+            _settingsPanel.Size    = new Size(mainContentPanel.ClientSize.Width - 24, 420);
             _settingsPanel.Visible = true;
         }
 
@@ -1277,6 +1271,15 @@ namespace frm_winget_upgrade
                 if (!IsDisposed) btnCheckAppUpdate.Enabled = true;
             };
             _settingsPanel.Controls.Add(btnCheckAppUpdate);
+            y += 42;
+
+            var btnDonate = BuildSettingsButton("💖  Support the Developer", new Point(0, y));
+            btnDonate.Click += (s, e) =>
+            {
+                using (var donateForm = new frmDonate())
+                    donateForm.ShowDialog(this);
+            };
+            _settingsPanel.Controls.Add(btnDonate);
 
             mainContentPanel.Controls.Add(_settingsPanel);
         }

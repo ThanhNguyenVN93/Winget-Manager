@@ -53,6 +53,14 @@ namespace frm_winget_upgrade
 
         private const int FallbackRecheckConcurrency = 6;
 
+        // Edge components are serviced by Windows Update, not winget — attempting to upgrade
+        // them through winget consistently fails (e.g. "REST API endpoint not found"), so
+        // they're filtered out of results entirely rather than offered and then failing.
+        private static bool IsEdgeComponent(string name, string id) =>
+            name.IndexOf("Microsoft Edge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            id.IndexOf("Microsoft.Edge",   StringComparison.OrdinalIgnoreCase) >= 0 ||
+            id.IndexOf("MicrosoftEdge",    StringComparison.OrdinalIgnoreCase) >= 0;
+
         // ── Raw command runner ────────────────────────────────────────────────
 
         public async Task<string> RunCommandAsync(string arguments)
@@ -134,7 +142,8 @@ namespace frm_winget_upgrade
             var    installed    = ParseInstalledOutput(rawInstalled, cancellationToken);
 
             var toRecheck = installed
-                .Where(p => !seenIds.Contains(p.Id) && !string.IsNullOrWhiteSpace(p.Name))
+                .Where(p => !seenIds.Contains(p.Id) && !string.IsNullOrWhiteSpace(p.Name) &&
+                            !IsEdgeComponent(p.Name, p.Id))
                 .ToList();
 
             if (toRecheck.Count == 0) return;
@@ -209,7 +218,7 @@ namespace frm_winget_upgrade
                     : string.Empty;
 
                 if (string.IsNullOrWhiteSpace(id)) continue;
-                if (string.Equals(id.Trim(), "Microsoft.Edge", StringComparison.OrdinalIgnoreCase)) continue;
+                if (IsEdgeComponent(name.Trim(), id.Trim())) continue;
 
                 result.Add(new WingetPackage
                 {

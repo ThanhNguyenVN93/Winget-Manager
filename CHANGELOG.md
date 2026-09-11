@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.1] — 2026-09-11
+
+### Fixed
+- Edge components (`Microsoft Edge`, `Microsoft Edge For Game Bar`, WebView/MSIX variants) could surface as upgradeable via the new deep-check fallback and then fail — they're serviced by Windows Update, not winget. Now filtered out by both Name and Id, not just the exact `Microsoft.Edge` id
+- The "Support the developer" donate prompt was shown as a modal dialog inside `FormClosing`, which also fires during the in-app self-update's `Application.Exit()` — closing that dialog mid-teardown could throw. It's no longer shown automatically on close
+
+### Changed
+- Donate prompt moved to a manual **"💖 Support the Developer"** button in Settings instead of appearing automatically when the app closes
+
+---
+
 ## [1.2.0] — 2026-09-11
 
 ### Added
