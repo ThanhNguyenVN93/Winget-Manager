@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.0] — 2026-09-11
+
+### Added
+- **Automatic retry with `--version` on ambiguous winget Id** — winget's own catalog can list two distinct locally-installed products under the same Id (e.g. "Google Chrome" and "Google Chrome Beta" both as `Google.Chrome.Beta.EXE`), refusing upgrade/uninstall with "Multiple versions of this package are installed" until disambiguated. The app now detects that message and automatically retries once with `--version` pinned to the row's own installed version
+- **Split log file by operation** — `update.log` (scans, settings, upgrades) and `uninstaller.log` (uninstall sessions) instead of one generically-named file; Settings has separate "Open Update Log" / "Open Uninstall Log" buttons
+
+### Fixed
+- Settings panel: the Maintenance section's last button row could overlap the fixed "Log Output" label below it. Regrouped into 3 paired rows and reduced the panel height to fit within the actual available space
+
+### Changed
+- "Errors Report" nav now opens the project's feedback form instead of a placeholder personal link
+
+---
+
 ## [1.2.3] — 2026-09-11
 
 ### Added
