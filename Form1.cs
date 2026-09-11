@@ -93,8 +93,12 @@ namespace frm_winget_upgrade
                 InitializeUpdatesGrid();
                 EnableGridDoubleBuffering(packagesGrid);
                 SetupEventHandlers();
+
+                // Check the app itself first — if the user accepts, DownloadAndApplyUpdateAsync
+                // exits the process before we'd ever reach the package scan below, so there's
+                // no point scanning winget packages just to throw the results away on restart.
+                await CheckForAppUpdateAsync(silent: true);
                 await ScanForUpdatesAsync();
-                _ = CheckForAppUpdateAsync(silent: true);
             }
             catch (Exception ex)
             {

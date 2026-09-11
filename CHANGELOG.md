@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.2] — 2026-09-11
+
+### Changed
+- Startup order reversed: the app now checks for its own update first and waits for that to resolve before scanning for winget package updates. Previously the package scan ran first while the self-update check fired in the background unawaited, so the two could run concurrently — pointless work if the user accepted a self-update (the scan's results were discarded on restart anyway), and a contributing factor in the `FormClosing`/`Application.Exit()` crash fixed in 1.2.1
+
+---
+
 ## [1.2.1] — 2026-09-11
 
 ### Fixed
