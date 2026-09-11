@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.3] — 2026-09-11
+
+### Added
+- **"Include beta/pre-release versions" setting** (off by default) — packages on a Beta, Dev, Canary, Nightly, Insider, Alpha, or Preview channel (e.g. Google Chrome Beta) are now excluded from the update scan unless this is turned on
+
+---
+
 ## [1.2.2] — 2026-09-11
 
 ### Changed

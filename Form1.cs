@@ -169,7 +169,7 @@ namespace frm_winget_upgrade
                     mainContentPanel.ClientSize.Width  - 24,
                     mainContentPanel.ClientSize.Height - 105 - 12);
             else if (_activeView == "Settings" && _settingsPanel != null)
-                _settingsPanel.Size = new Size(mainContentPanel.ClientSize.Width - 24, 420);
+                _settingsPanel.Size = new Size(mainContentPanel.ClientSize.Width - 24, 454);
         }
 
         // ── Grid initialisation ───────────────────────────────────────────────
@@ -1141,7 +1141,7 @@ namespace frm_winget_upgrade
             logOutput.Size        = new Size(mainContentPanel.ClientSize.Width - 24, 104);
 
             if (_settingsPanel == null) BuildSettingsPanel();
-            _settingsPanel.Size    = new Size(mainContentPanel.ClientSize.Width - 24, 420);
+            _settingsPanel.Size    = new Size(mainContentPanel.ClientSize.Width - 24, 454);
             _settingsPanel.Visible = true;
         }
 
@@ -1194,6 +1194,13 @@ namespace frm_winget_upgrade
                 AppSettings.AcceptAgreements, y);
             chkAgreements.CheckedChanged += (s, e) => AppSettings.AcceptAgreements = chkAgreements.Checked;
             _settingsPanel.Controls.Add(chkAgreements);
+            y += 34;
+
+            var chkBeta = BuildCheckBox(
+                "Include beta/pre-release versions  (Beta, Dev, Canary, Nightly, Insider, Alpha, Preview channels)",
+                AppSettings.IncludeBetaVersions, y);
+            chkBeta.CheckedChanged += (s, e) => AppSettings.IncludeBetaVersions = chkBeta.Checked;
+            _settingsPanel.Controls.Add(chkBeta);
             y += 50;
 
             _settingsPanel.Controls.Add(new Label

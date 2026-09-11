@@ -110,7 +110,7 @@ namespace frm_winget_upgrade
             this.lblVersion.Name = "lblVersion";
             this.lblVersion.Size = new System.Drawing.Size(27, 13);
             this.lblVersion.TabIndex = 1;
-            this.lblVersion.Text = "v1.2.2";
+            this.lblVersion.Text = "v1.2.3";
             // 
             // sidebarPanel
             // 

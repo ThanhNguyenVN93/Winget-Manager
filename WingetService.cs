@@ -61,6 +61,15 @@ namespace frm_winget_upgrade
             id.IndexOf("Microsoft.Edge",   StringComparison.OrdinalIgnoreCase) >= 0 ||
             id.IndexOf("MicrosoftEdge",    StringComparison.OrdinalIgnoreCase) >= 0;
 
+        // Word-bounded so it catches "Chrome Beta" / "Google.Chrome.Beta" without matching
+        // substrings inside unrelated words (e.g. "Developer", "Preview Pane").
+        private static readonly Regex PreReleaseChannel = new Regex(
+            @"(?<![A-Za-z])(beta|dev|canary|nightly|insider|alpha|preview)(?![A-Za-z])",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static bool IsPreReleaseChannel(string name, string id) =>
+            PreReleaseChannel.IsMatch(name) || PreReleaseChannel.IsMatch(id);
+
         // ── Raw command runner ────────────────────────────────────────────────
 
         public async Task<string> RunCommandAsync(string arguments)
@@ -143,7 +152,8 @@ namespace frm_winget_upgrade
 
             var toRecheck = installed
                 .Where(p => !seenIds.Contains(p.Id) && !string.IsNullOrWhiteSpace(p.Name) &&
-                            !IsEdgeComponent(p.Name, p.Id))
+                            !IsEdgeComponent(p.Name, p.Id) &&
+                            (AppSettings.IncludeBetaVersions || !IsPreReleaseChannel(p.Name, p.Id)))
                 .ToList();
 
             if (toRecheck.Count == 0) return;
@@ -219,6 +229,7 @@ namespace frm_winget_upgrade
 
                 if (string.IsNullOrWhiteSpace(id)) continue;
                 if (IsEdgeComponent(name.Trim(), id.Trim())) continue;
+                if (!AppSettings.IncludeBetaVersions && IsPreReleaseChannel(name.Trim(), id.Trim())) continue;
 
                 result.Add(new WingetPackage
                 {
