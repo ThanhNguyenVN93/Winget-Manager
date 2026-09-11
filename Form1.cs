@@ -177,7 +177,7 @@ namespace frm_winget_upgrade
                     mainContentPanel.ClientSize.Width  - 24,
                     mainContentPanel.ClientSize.Height - 105 - 12);
             else if (_activeView == "Settings" && _settingsPanel != null)
-                _settingsPanel.Size = new Size(mainContentPanel.ClientSize.Width - 24, 454);
+                _settingsPanel.Size = new Size(mainContentPanel.ClientSize.Width - 24, 370);
         }
 
         // ── Grid initialisation ───────────────────────────────────────────────
@@ -279,7 +279,9 @@ namespace frm_winget_upgrade
             WireNavButton(navInstalled, "Installed Packages", "Manage and update your Windows packages");
             WireNavButton(navUpdates,   "Available Updates",  "Packages ready for update");
             WireNavButton(navSettings,  "Settings",           "Configure Winget Manager preferences");
-            navLogs.Click += (s, e) => Process.Start(new ProcessStartInfo("https://www.facebook.com/thanhitma9x") { UseShellExecute = true });
+            navLogs.Click += (s, e) => Process.Start(new ProcessStartInfo(
+                "https://docs.google.com/forms/d/e/1FAIpQLSeo-lrn9p7d1iRsUXW1JCWRhnNCeTpYmA9DSRbewbb5iHnbmA/viewform?usp=dialog")
+                { UseShellExecute = true });
 
             int btnX = overallProgress.Right + ThemeConstants.Spacing8;
             int btnW = mainContentPanel.ClientSize.Width - ThemeConstants.Spacing12 - btnX;
@@ -1155,7 +1157,7 @@ namespace frm_winget_upgrade
             logOutput.Size        = new Size(mainContentPanel.ClientSize.Width - 24, 104);
 
             if (_settingsPanel == null) BuildSettingsPanel();
-            _settingsPanel.Size    = new Size(mainContentPanel.ClientSize.Width - 24, 454);
+            _settingsPanel.Size    = new Size(mainContentPanel.ClientSize.Width - 24, 370);
             _settingsPanel.Visible = true;
         }
 
@@ -1251,7 +1253,18 @@ namespace frm_winget_upgrade
             };
             _settingsPanel.Controls.Add(btnResetCache);
 
-            var btnClearLog = BuildSettingsButton("🧹  Clear Log History", new Point(232, y));
+            var btnCheckAppUpdate = BuildSettingsButton("⬆️  Check for App Updates", new Point(232, y));
+            btnCheckAppUpdate.Click += async (s, e) =>
+            {
+                btnCheckAppUpdate.Enabled = false;
+                AddLogEntry("Checking for app updates…", ThemeColors.InfoBlue);
+                await CheckForAppUpdateAsync(silent: false);
+                if (!IsDisposed) btnCheckAppUpdate.Enabled = true;
+            };
+            _settingsPanel.Controls.Add(btnCheckAppUpdate);
+            y += 42;
+
+            var btnClearLog = BuildSettingsButton("🧹  Clear Log History", new Point(0, y));
             btnClearLog.Click += (s, e) =>
             {
                 lock (_logFileLock)
@@ -1266,6 +1279,14 @@ namespace frm_winget_upgrade
                 AddLogEntry("Log history cleared.", ThemeColors.InfoBlue);
             };
             _settingsPanel.Controls.Add(btnClearLog);
+
+            var btnDonate = BuildSettingsButton("💖  Support the Developer", new Point(232, y));
+            btnDonate.Click += (s, e) =>
+            {
+                using (var donateForm = new frmDonate())
+                    donateForm.ShowDialog(this);
+            };
+            _settingsPanel.Controls.Add(btnDonate);
             y += 42;
 
             var btnOpenUpdateLog = BuildSettingsButton("📄  Open Update Log", new Point(0, y));
@@ -1275,26 +1296,6 @@ namespace frm_winget_upgrade
             var btnOpenUninstallLog = BuildSettingsButton("📄  Open Uninstall Log", new Point(232, y));
             btnOpenUninstallLog.Click += (s, e) => OpenLogFile(_uninstallLogFilePath);
             _settingsPanel.Controls.Add(btnOpenUninstallLog);
-            y += 42;
-
-            var btnCheckAppUpdate = BuildSettingsButton("⬆️  Check for App Updates", new Point(0, y));
-            btnCheckAppUpdate.Click += async (s, e) =>
-            {
-                btnCheckAppUpdate.Enabled = false;
-                AddLogEntry("Checking for app updates…", ThemeColors.InfoBlue);
-                await CheckForAppUpdateAsync(silent: false);
-                if (!IsDisposed) btnCheckAppUpdate.Enabled = true;
-            };
-            _settingsPanel.Controls.Add(btnCheckAppUpdate);
-            y += 42;
-
-            var btnDonate = BuildSettingsButton("💖  Support the Developer", new Point(0, y));
-            btnDonate.Click += (s, e) =>
-            {
-                using (var donateForm = new frmDonate())
-                    donateForm.ShowDialog(this);
-            };
-            _settingsPanel.Controls.Add(btnDonate);
 
             mainContentPanel.Controls.Add(_settingsPanel);
         }
