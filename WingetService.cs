@@ -429,10 +429,19 @@ namespace frm_winget_upgrade
             return len > 0 ? s.Substring(start, len) : string.Empty;
         }
 
+        // winget's own catalog can list two distinct locally-installed products under the
+        // same Id (e.g. "Google Chrome" and "Google Chrome Beta" both as
+        // Google.Chrome.Beta.EXE) — it then refuses to act, asking for `--version` to say
+        // which installed instance is meant. Pinning to the row's own installed version
+        // disambiguates it automatically instead of leaving the user to retry by hand.
+        private static readonly Regex MultipleVersionsError = new Regex(
+            "Multiple versions of this package are installed", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         // ── Upgrade ───────────────────────────────────────────────────────────
 
         public async Task<bool> UpgradePackageAsync(string packageId,
                                                      string source,
+                                                     string installedVersion,
                                                      CancellationToken cancellationToken = default,
                                                      IProgress<string> progress = null)
         {
@@ -441,7 +450,14 @@ namespace frm_winget_upgrade
             if (AppSettings.SilentMode)       args.Append(" --silent");
             if (AppSettings.ForceInstall)     args.Append(" --force");
             if (AppSettings.AcceptAgreements) args.Append(" --accept-package-agreements --accept-source-agreements");
-            return await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+
+            var (ok, ambiguous) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+            if (ok || !ambiguous || string.IsNullOrWhiteSpace(installedVersion)) return ok;
+
+            progress?.Report($"Multiple installed versions matched — retrying with --version \"{installedVersion}\"…");
+            args.Append($" --version \"{installedVersion}\"");
+            var (retryOk, _) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+            return retryOk;
         }
 
         private static bool IsMsStoreSource(string source) =>
@@ -450,6 +466,7 @@ namespace frm_winget_upgrade
         // ── Uninstall ─────────────────────────────────────────────────────────
 
         public async Task<bool> UninstallPackageAsync(string packageId,
+                                                       string installedVersion,
                                                        CancellationToken cancellationToken = default,
                                                        IProgress<string> progress = null)
         {
@@ -457,20 +474,29 @@ namespace frm_winget_upgrade
             if (AppSettings.SilentMode)       args.Append(" --silent");
             if (AppSettings.ForceInstall)     args.Append(" --force");
             if (AppSettings.AcceptAgreements) args.Append(" --accept-source-agreements");
-            return await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+
+            var (ok, ambiguous) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+            if (ok || !ambiguous || string.IsNullOrWhiteSpace(installedVersion)) return ok;
+
+            progress?.Report($"Multiple installed versions matched — retrying with --version \"{installedVersion}\"…");
+            args.Append($" --version \"{installedVersion}\"");
+            var (retryOk, _) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+            return retryOk;
         }
 
         // ── Source reset ──────────────────────────────────────────────────────
 
         public async Task<bool> ResetSourcesAsync(CancellationToken cancellationToken = default,
                                                    IProgress<string> progress = null)
-            => await RunWingetOperationAsync("source reset --force --accept-source-agreements", cancellationToken, progress);
+        {
+            var (ok, _) = await RunWingetOperationAsync("source reset --force --accept-source-agreements", cancellationToken, progress);
+            return ok;
+        }
 
         // ── Shared streamed operation runner ──────────────────────────────────
 
-        private async Task<bool> RunWingetOperationAsync(string arguments,
-                                                          CancellationToken cancellationToken,
-                                                          IProgress<string> progress)
+        private async Task<(bool Success, bool AmbiguousVersions)> RunWingetOperationAsync(
+            string arguments, CancellationToken cancellationToken, IProgress<string> progress)
         {
             return await Task.Run(() =>
             {
@@ -489,9 +515,10 @@ namespace frm_winget_upgrade
                 {
                     using (var proc = Process.Start(psi))
                     {
-                        if (proc == null) return false;
+                        if (proc == null) return (false, false);
 
                         bool   textIndicatesFailure = false;
+                        bool   ambiguousVersions     = false;
                         string line;
 
                         while ((line = proc.StandardOutput.ReadLine()) != null)
@@ -499,7 +526,7 @@ namespace frm_winget_upgrade
                             if (cancellationToken.IsCancellationRequested)
                             {
                                 try { proc.Kill(); } catch { }
-                                return false;
+                                return (false, false);
                             }
 
                             string cleaned = AnsiEscape.Replace(line, string.Empty).Trim();
@@ -510,21 +537,25 @@ namespace frm_winget_upgrade
                                 cleaned.IndexOf("different install technology", StringComparison.OrdinalIgnoreCase) >= 0)
                                 textIndicatesFailure = true;
 
+                            if (MultipleVersionsError.IsMatch(cleaned))
+                                ambiguousVersions = true;
+
                             progress?.Report(cleaned);
                         }
 
                         proc.WaitForExit();
 
-                        if (cancellationToken.IsCancellationRequested) return false;
+                        if (cancellationToken.IsCancellationRequested) return (false, false);
 
                         // Exit code 3010 = success, reboot required (Windows Installer standard).
-                        return !textIndicatesFailure && (proc.ExitCode == 0 || proc.ExitCode == 3010);
+                        bool success = !textIndicatesFailure && (proc.ExitCode == 0 || proc.ExitCode == 3010);
+                        return (success, ambiguousVersions);
                     }
                 }
                 catch (Exception ex)
                 {
                     progress?.Report($"[ERROR] {ex.Message}");
-                    return false;
+                    return (false, false);
                 }
             }, cancellationToken);
         }

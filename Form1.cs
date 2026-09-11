@@ -684,7 +684,7 @@ namespace frm_winget_upgrade
 
                     AddLogEntry($"→ {pkg.Name}  [{pkg.Id}]", ThemeColors.InfoBlue);
 
-                    bool ok = await _service.UpgradePackageAsync(pkg.Id, pkg.Source, token, new Progress<string>(AppendRawLog));
+                    bool ok = await _service.UpgradePackageAsync(pkg.Id, pkg.Source, pkg.InstalledVersion, token, new Progress<string>(AppendRawLog));
 
                     if (token.IsCancellationRequested) { wasCancelled = true; break; }
 
@@ -778,7 +778,7 @@ namespace frm_winget_upgrade
 
                     AddLogEntry($"→ Uninstalling {pkg.Name}  [{pkg.Id}]", ThemeColors.WarningOrange);
 
-                    bool ok = await _service.UninstallPackageAsync(pkg.Id, token, new Progress<string>(AppendRawLog));
+                    bool ok = await _service.UninstallPackageAsync(pkg.Id, pkg.InstalledVersion, token, new Progress<string>(AppendRawLog));
 
                     if (token.IsCancellationRequested) { wasCancelled = true; break; }
 
