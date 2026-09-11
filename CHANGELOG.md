@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.0] — 2026-09-11
+
+### Added
+- **Deep-check fallback for missed updates** — winget's bulk `upgrade` scan silently drops a package when it hits an ambiguous name match (e.g. multiple "qBittorrent" listings) or when the app is only known locally via its ARP registry key rather than a real winget Id; those packages are now re-queried individually (by exact Id, or by display name for ARP-only entries) to recover the update
+- **Track column** in Available Updates — flags packages whose Id names a fixed version line (e.g. `OpenJS.NodeJS.22`) as "🔒 Version-locked"; these are excluded from "Select All" by default but can still be ticked individually
+- **Elapsed-time readout** next to the progress bar during scans, upgrades, and uninstalls
+- **"Open Log File" button** in Settings — opens `upgrade.log` on demand instead of only when an upgrade fails
+
+---
+
 ## [1.1.0] — 2026-07-07
 
 ### Added
