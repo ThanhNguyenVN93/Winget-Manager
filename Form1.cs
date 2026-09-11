@@ -42,10 +42,18 @@ namespace frm_winget_upgrade
         private          Panel               _settingsPanel;
         private          string              _activeView = "Dashboard";
 
-        private static readonly string _logFilePath =
+        private static readonly string _updateLogFilePath =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                         "WingetManager", "upgrade.log");
+                         "WingetManager", "update.log");
+        private static readonly string _uninstallLogFilePath =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "WingetManager", "uninstaller.log");
         private static readonly object _logFileLock = new object();
+
+        // Scans, settings, and upgrades write to update.log by default; an uninstall session
+        // switches this to uninstaller.log for its duration so log entries land in the file
+        // that matches what's actually happening, instead of one generically-named file.
+        private string _currentLogFilePath = _updateLogFilePath;
 
         private readonly System.Windows.Forms.Timer _resizeDebounce;
         private readonly System.Windows.Forms.Timer _searchDebounce;
@@ -663,6 +671,7 @@ namespace frm_winget_upgrade
             _isBusy  = true;
             var token = _cts.Token;
 
+            _currentLogFilePath = _updateLogFilePath;
             SetControlsEnabled(false);
             SetActionEnabled(false);
             UpdateProgress(0);
@@ -757,6 +766,7 @@ namespace frm_winget_upgrade
             _isBusy = true;
             var token = _cts.Token;
 
+            _currentLogFilePath = _uninstallLogFilePath;
             SetControlsEnabled(false);
             SetActionEnabled(false);
             UpdateProgress(0);
@@ -812,6 +822,7 @@ namespace frm_winget_upgrade
             }
 
             FinishBulkOperation("uninstall", succeeded, failed, wasCancelled, targets.Count);
+            _currentLogFilePath = _updateLogFilePath;
         }
 
         // ── Shared bulk-operation helpers ─────────────────────────────────────
@@ -858,8 +869,10 @@ namespace frm_winget_upgrade
                 MessageBoxButtons.OK,
                 failed == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
 
-            if (failed > 0 && File.Exists(_logFilePath))
-                Process.Start(new ProcessStartInfo(_logFilePath) { UseShellExecute = true });
+            string logPath = string.Equals(verb, "uninstall", StringComparison.OrdinalIgnoreCase)
+                ? _uninstallLogFilePath : _updateLogFilePath;
+            if (failed > 0 && File.Exists(logPath))
+                Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
         }
 
         // Called via Progress<string> — always marshalled through BeginInvoke.
@@ -868,7 +881,8 @@ namespace frm_winget_upgrade
             if (!logOutput.IsHandleCreated || logOutput.IsDisposed) return;
             string formatted = $"[{DateTime.Now:HH:mm:ss}]    {line}";
             // File I/O is synchronous and must not block the UI message pump.
-            Task.Run(() => WriteToLogFile(formatted));
+            string logPath = _currentLogFilePath;
+            Task.Run(() => WriteToLogFile(formatted, logPath));
             logOutput.BeginInvoke(new Action(() =>
             {
                 logOutput.SelectionStart  = logOutput.TextLength;
@@ -1242,7 +1256,8 @@ namespace frm_winget_upgrade
             {
                 lock (_logFileLock)
                 {
-                    if (File.Exists(_logFilePath)) File.Delete(_logFilePath);
+                    if (File.Exists(_updateLogFilePath))    File.Delete(_updateLogFilePath);
+                    if (File.Exists(_uninstallLogFilePath)) File.Delete(_uninstallLogFilePath);
                 }
                 // ReadOnly is briefly lifted — same pattern as TrimLogBuffer.
                 logOutput.ReadOnly = false;
@@ -1253,24 +1268,13 @@ namespace frm_winget_upgrade
             _settingsPanel.Controls.Add(btnClearLog);
             y += 42;
 
-            var btnOpenLog = BuildSettingsButton("📄  Open Log File", new Point(0, y));
-            btnOpenLog.Click += (s, e) =>
-            {
-                try
-                {
-                    if (!File.Exists(_logFilePath))
-                    {
-                        AddLogEntry("No log file yet — nothing has been written this run.", ThemeColors.InfoBlue);
-                        return;
-                    }
-                    Process.Start(new ProcessStartInfo(_logFilePath) { UseShellExecute = true });
-                }
-                catch (Exception ex)
-                {
-                    AddLogEntry($"Could not open log file: {ex.Message}", ThemeColors.ErrorRed);
-                }
-            };
-            _settingsPanel.Controls.Add(btnOpenLog);
+            var btnOpenUpdateLog = BuildSettingsButton("📄  Open Update Log", new Point(0, y));
+            btnOpenUpdateLog.Click += (s, e) => OpenLogFile(_updateLogFilePath);
+            _settingsPanel.Controls.Add(btnOpenUpdateLog);
+
+            var btnOpenUninstallLog = BuildSettingsButton("📄  Open Uninstall Log", new Point(232, y));
+            btnOpenUninstallLog.Click += (s, e) => OpenLogFile(_uninstallLogFilePath);
+            _settingsPanel.Controls.Add(btnOpenUninstallLog);
             y += 42;
 
             var btnCheckAppUpdate = BuildSettingsButton("⬆️  Check for App Updates", new Point(0, y));
@@ -1404,23 +1408,40 @@ namespace frm_winget_upgrade
             logOutput.ScrollToCaret();
         }
 
-        private static void WriteToLogFile(string line)
+        private void OpenLogFile(string path)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    AddLogEntry("No log file yet — nothing has been written this run.", ThemeColors.InfoBlue);
+                    return;
+                }
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                AddLogEntry($"Could not open log file: {ex.Message}", ThemeColors.ErrorRed);
+            }
+        }
+
+        private static void WriteToLogFile(string line, string path)
         {
             try
             {
                 lock (_logFileLock)
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(_logFilePath));
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
 
-                    var info = new FileInfo(_logFilePath);
+                    var info = new FileInfo(path);
                     if (info.Exists && info.Length > 2 * 1024 * 1024)
                     {
-                        string bak = _logFilePath + ".bak";
+                        string bak = path + ".bak";
                         if (File.Exists(bak)) File.Delete(bak);
-                        File.Move(_logFilePath, bak);
+                        File.Move(path, bak);
                     }
 
-                    File.AppendAllText(_logFilePath, line + Environment.NewLine, System.Text.Encoding.UTF8);
+                    File.AppendAllText(path, line + Environment.NewLine, System.Text.Encoding.UTF8);
                 }
             }
             catch { }
@@ -1438,7 +1459,7 @@ namespace frm_winget_upgrade
             logOutput.SelectionStart = logOutput.TextLength;
             logOutput.ScrollToCaret();
             TrimLogBuffer();
-            WriteToLogFile(formatted);
+            WriteToLogFile(formatted, _currentLogFilePath);
         }
 
         public void UpdateProgress(int value)
