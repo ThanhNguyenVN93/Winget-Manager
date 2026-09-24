@@ -20,9 +20,14 @@ A modern, single-file Windows desktop GUI for **Windows Package Manager (winget)
 |---|---|
 | **Available Updates** | Scans winget for all upgradeable packages and displays them in a sortable grid |
 | **Batch Upgrade** | Select any subset of packages and upgrade them all with a single click |
-| **Installed Packages** | Browse every package currently installed on the system |
-| **Live Log** | Real-time streaming output from winget, persisted to a log file |
-| **Settings** | Toggle silent mode, force-install, and auto-accept agreements; reset winget sources; clear the log |
+| **Installed Packages** | Browse every package currently installed on the system and uninstall selected ones |
+| **Exclude Apps** | Right-click a row → *Exclude from updates* to hide an app from scans; manage the list (add / remove by package Id) under Settings → *Excluded Apps*. Saved in `%AppData%\WingetManager\excluded.txt` |
+| **What's New** | Right-click a row → *What's new* to read the package's release notes (fetched on demand from `winget show`), with a link to the release page. Packages whose manifest has no notes say so |
+| **Version-locked Packages** | Packages pinned to a version track (e.g. Node LTS) are flagged and skipped by *Select All* |
+| **Beta Filter** | Beta / Dev / Canary / Nightly / Insider / Alpha / Preview channels are excluded from scans unless enabled in Settings |
+| **Auto-Update** | Checks GitHub for a newer Winget Manager at startup, shows its release notes, and updates in place |
+| **Live Log** | Real-time streaming output from winget, persisted to `update.log` and `uninstaller.log` in `%AppData%\WingetManager` |
+| **Settings** | Toggle silent mode, force-install, auto-accept agreements and beta versions; manage excluded apps; reset winget sources; open or clear the logs |
 | **Single EXE** | All UI libraries (Guna UI2, Guna Charts) are embedded — nothing to install alongside the binary |
 | **Always Admin** | App manifest requests administrator elevation at launch so winget operations never fail silently |
 
@@ -87,6 +92,7 @@ The release EXE is self-contained: Guna DLLs are embedded as managed resources a
 | Silent Mode | `--silent` |
 | Force Install | `--force` |
 | Accept Agreements | `--accept-package-agreements --accept-source-agreements` |
+| Include beta/pre-release versions | _(off by default)_ — includes pre-release channels in the update scan |
 
 ---
 
