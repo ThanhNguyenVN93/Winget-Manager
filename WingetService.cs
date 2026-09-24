@@ -9,6 +9,13 @@ using System.Threading.Tasks;
 
 namespace frm_winget_upgrade
 {
+    public sealed class ReleaseNotes
+    {
+        public string Notes    { get; set; } = string.Empty;
+        public string Url      { get; set; } = string.Empty;
+        public string Homepage { get; set; } = string.Empty;
+    }
+
     public sealed class WingetPackage
     {
         public string Name             { get; set; } = string.Empty;
@@ -104,6 +111,37 @@ namespace frm_winget_upgrade
                 }
                 return sb.ToString();
             });
+        }
+
+        // ── Release notes ─────────────────────────────────────────────────────
+
+        // Parses the English field labels of `winget show`; a localized winget yields empty notes.
+        public async Task<ReleaseNotes> GetReleaseNotesAsync(string id)
+        {
+            string raw   = await RunCommandAsync($"show --id \"{id}\" --exact --accept-source-agreements");
+            var    info  = new ReleaseNotes();
+            var    lines = raw.Replace("\r", string.Empty).Split('\n');
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                if (line.StartsWith("Release Notes Url:"))  info.Url      = line.Substring("Release Notes Url:".Length).Trim();
+                else if (line.StartsWith("Homepage:"))      info.Homepage = line.Substring("Homepage:".Length).Trim();
+                else if (line.StartsWith("Release Notes:"))
+                {
+                    var sb = new StringBuilder(line.Substring("Release Notes:".Length).Trim());
+                    while (i + 1 < lines.Length &&
+                           (lines[i + 1].StartsWith(" ") ||
+                            (lines[i + 1].Length == 0 && i + 2 < lines.Length && lines[i + 2].StartsWith(" "))))
+                    {
+                        i++;
+                        if (sb.Length > 0) sb.AppendLine();
+                        sb.Append(lines[i].Trim());
+                    }
+                    info.Notes = sb.ToString().Trim();
+                }
+            }
+            return info;
         }
 
         // ── Available updates ─────────────────────────────────────────────────

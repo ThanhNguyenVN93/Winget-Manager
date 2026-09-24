@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.2] — 2026-09-24
+
+### Added
+- **"What's new" for packages** — right-click a row and choose "What's new" to see the package's release notes (fetched on demand via `winget show`), with an "Open link" button to the release page or homepage. Packages without notes in their manifest say so
+- **Release notes in the app-update prompt** — the "Update Available" dialog now shows the release notes of the new Winget Manager version before you confirm
+
+---
+
 ## [1.4.1] — 2026-09-24
 
 ### Fixed

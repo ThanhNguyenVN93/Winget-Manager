@@ -17,6 +17,7 @@ namespace frm_winget_upgrade
         public string  TagName     { get; set; }
         public string  DownloadUrl { get; set; }
         public string  HtmlUrl     { get; set; }
+        public string  Notes       { get; set; }
     }
 
     public sealed class UpdateService
@@ -56,7 +57,8 @@ namespace frm_winget_upgrade
                 Version     = remoteVersion,
                 TagName     = tagName,
                 DownloadUrl = downloadUrl,
-                HtmlUrl     = data.TryGetValue("html_url", out var url) ? url as string : null
+                HtmlUrl     = data.TryGetValue("html_url", out var url) ? url as string : null,
+                Notes       = data.TryGetValue("body", out var body) ? body as string : null
             };
         }
 

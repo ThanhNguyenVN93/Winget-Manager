@@ -64,6 +64,7 @@
     <Compile Include="AppSettings.cs" />
     <Compile Include="DonateSettings.cs" />
     <Compile Include="ExcludedPackages.cs" />
+    <Compile Include="ReleaseNotesDialog.cs" />
     <Compile Include="frmDonate.cs">
       <SubType>Form</SubType>
     </Compile>

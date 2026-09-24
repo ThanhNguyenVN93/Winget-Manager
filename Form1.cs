@@ -316,6 +316,9 @@ namespace frm_winget_upgrade
             };
             var itemExclude = new ToolStripMenuItem("🚫  Exclude from updates");
             itemExclude.Click += (s, e) => ExcludeRow(_contextRowIndex);
+            var itemNotes = new ToolStripMenuItem("📝  What's new");
+            itemNotes.Click += async (s, e) => await ShowReleaseNotesAsync(_contextRowIndex);
+            menu.Items.Add(itemNotes);
             menu.Items.Add(itemExclude);
             packagesGrid.CellMouseDown += (s, e) =>
             {
@@ -325,6 +328,36 @@ namespace frm_winget_upgrade
                 packagesGrid.Rows[e.RowIndex].Selected = true;
                 menu.Show(Cursor.Position);
             };
+        }
+
+        private async Task ShowReleaseNotesAsync(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= packagesGrid.Rows.Count) return;
+
+            string id   = packagesGrid.Rows[rowIndex].Cells[COL_ID].Value?.ToString();
+            string name = packagesGrid.Rows[rowIndex].Cells[COL_NAME].Value?.ToString();
+            AddLogEntry($"Fetching release notes for {name}…", ThemeColors.InfoBlue);
+
+            ReleaseNotes notes;
+            try { notes = await _service.GetReleaseNotesAsync(id); }
+            catch (Exception ex)
+            {
+                AddLogEntry($"Could not fetch release notes: {ex.Message}", ThemeColors.ErrorRed);
+                return;
+            }
+            if (IsDisposed) return;
+
+            string link = !string.IsNullOrEmpty(notes.Url) ? notes.Url : notes.Homepage;
+            string body = !string.IsNullOrEmpty(notes.Notes)
+                ? notes.Notes
+                : "winget has no release notes for this package." +
+                  (string.IsNullOrEmpty(link) ? string.Empty : "\r\n\r\nYou can check the publisher's page instead.");
+
+            var choice = ReleaseNotesDialog.Show(this, "What's new", $"{name}  [{id}]", body,
+                string.IsNullOrEmpty(link) ? null : "Open link", "Close");
+
+            if (choice == DialogResult.Yes && !string.IsNullOrEmpty(link))
+                Process.Start(new ProcessStartInfo(link) { UseShellExecute = true });
         }
 
         private void ExcludeRow(int rowIndex)
@@ -495,13 +528,10 @@ namespace frm_winget_upgrade
                 return;
             }
 
-            var choice = MessageBox.Show(
-                $"A new version is available: {info.TagName}\n\n" +
-                "Download and install it now? The app will restart automatically.",
-                "Update Available",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Information,
-                MessageBoxDefaultButton.Button1);
+            var choice = ReleaseNotesDialog.Show(this, "Update Available",
+                $"Winget Manager {info.TagName} is available — the app restarts automatically after updating.",
+                string.IsNullOrWhiteSpace(info.Notes) ? "(No release notes provided.)" : info.Notes,
+                "Update now", "Later");
 
             if (choice != DialogResult.Yes)
             {
