@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace frm_winget_upgrade
@@ -34,8 +35,26 @@ namespace frm_winget_upgrade
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 { if (e.ExceptionObject is Exception ex) ShowFatalError(ex); };
 
-            try { Application.Run(new Form1()); }
-            catch (Exception ex) { ShowFatalError(ex); }
+            using (var instanceLock = new Mutex(false, @"Local\WingetManager_SingleInstance"))
+            {
+                if (!TryAcquire(instanceLock))
+                {
+                    MessageBox.Show("Winget Manager is already running.", "Winget Manager",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                try { Application.Run(new Form1()); }
+                catch (Exception ex) { ShowFatalError(ex); }
+            }
+        }
+
+        // The short wait covers a relaunch (admin elevation, self-update) where the previous
+        // process is still shutting down and hasn't released the lock yet.
+        private static bool TryAcquire(Mutex instanceLock)
+        {
+            try { return instanceLock.WaitOne(3000); }
+            catch (AbandonedMutexException) { return true; }
         }
 
         private static bool IsOsSupported()
