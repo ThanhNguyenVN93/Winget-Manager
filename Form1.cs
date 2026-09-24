@@ -41,6 +41,7 @@ namespace frm_winget_upgrade
         private          CancellationTokenSource _viewLoadCts;
         private          Panel               _settingsPanel;
         private          string              _activeView = "Dashboard";
+        private          int                 _contextRowIndex = -1;
 
         private static readonly string _updateLogFilePath =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -274,6 +275,7 @@ namespace frm_winget_upgrade
             packagesGrid.CurrentCellDirtyStateChanged += PackagesGrid_CurrentCellDirtyStateChanged;
             packagesGrid.CellValueChanged             += PackagesGrid_CellValueChanged;
             packagesGrid.CellFormatting                += PackagesGrid_CellFormatting;
+            BuildGridContextMenu();
 
             WireNavButton(navDashboard, "Dashboard",          "Overview of your package management system");
             WireNavButton(navInstalled, "Installed Packages", "Manage and update your Windows packages");
@@ -304,6 +306,38 @@ namespace frm_winget_upgrade
             _btnAction.DisabledState.ForeColor = Color.FromArgb(90, 90, 90);
             _btnAction.Click += BtnAction_Click;
             mainContentPanel.Controls.Add(_btnAction);
+        }
+
+        private void BuildGridContextMenu()
+        {
+            var menu = new ContextMenuStrip
+            {
+                BackColor = ThemeColors.DarkCharcoal,
+                ForeColor = ThemeColors.SecondaryText
+            };
+            var itemExclude = new ToolStripMenuItem("🚫  Exclude from updates");
+            itemExclude.Click += (s, e) => ExcludeRow(_contextRowIndex);
+            menu.Items.Add(itemExclude);
+            packagesGrid.CellMouseDown += (s, e) =>
+            {
+                if (e.Button != MouseButtons.Right || e.RowIndex < 0 || _isBusy) return;
+                _contextRowIndex = e.RowIndex;
+                packagesGrid.ClearSelection();
+                packagesGrid.Rows[e.RowIndex].Selected = true;
+                menu.Show(Cursor.Position);
+            };
+        }
+
+        private void ExcludeRow(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= packagesGrid.Rows.Count) return;
+
+            string id   = packagesGrid.Rows[rowIndex].Cells[COL_ID].Value?.ToString();
+            string name = packagesGrid.Rows[rowIndex].Cells[COL_NAME].Value?.ToString();
+            if (!ExcludedPackages.Add(id)) return;
+
+            AddLogEntry($"{name} [{id}] excluded from updates — manage in Settings.", ThemeColors.WarningOrange);
+            if (_activeView != "Installed Packages") RemoveGridRowById(id);
         }
 
         private async void BtnScanUpdates_Click(object sender, EventArgs e)
@@ -1296,6 +1330,80 @@ namespace frm_winget_upgrade
             var btnOpenUninstallLog = BuildSettingsButton("📄  Open Uninstall Log", new Point(232, y));
             btnOpenUninstallLog.Click += (s, e) => OpenLogFile(_uninstallLogFilePath);
             _settingsPanel.Controls.Add(btnOpenUninstallLog);
+            y += 50;
+
+            _settingsPanel.Controls.Add(new Label
+            {
+                Text      = "Excluded Apps",
+                Font      = new Font("Segoe UI", 10F, FontStyle.Bold),
+                ForeColor = ThemeColors.PrimaryText,
+                BackColor = Color.Transparent,
+                AutoSize  = true,
+                Location  = new Point(0, y)
+            });
+            y += 28;
+
+            _settingsPanel.Controls.Add(new Label
+            {
+                BackColor = Color.FromArgb(50, 50, 50),
+                Location  = new Point(0, y),
+                Size      = new Size(540, 1)
+            });
+            y += 12;
+
+            var lstExcluded = new ListBox
+            {
+                Location      = new Point(0, y),
+                Size          = new Size(452, 110),
+                BackColor     = ThemeColors.DarkCharcoal,
+                ForeColor     = ThemeColors.SecondaryText,
+                BorderStyle   = BorderStyle.FixedSingle,
+                SelectionMode = SelectionMode.MultiExtended
+            };
+            Action reloadExcluded = () =>
+            {
+                lstExcluded.Items.Clear();
+                foreach (var id in ExcludedPackages.All()) lstExcluded.Items.Add(id);
+            };
+            reloadExcluded();
+            _settingsPanel.Controls.Add(lstExcluded);
+
+            var btnRemoveExcluded = BuildSettingsButton("Remove", new Point(464, y));
+            btnRemoveExcluded.Size = new Size(76, 34);
+            btnRemoveExcluded.Click += (s, e) =>
+            {
+                foreach (var id in lstExcluded.SelectedItems.Cast<string>().ToList())
+                {
+                    ExcludedPackages.Remove(id);
+                    AddLogEntry($"{id} removed from exclusions — run Check Updates to include it again.", ThemeColors.InfoBlue);
+                }
+                reloadExcluded();
+            };
+            _settingsPanel.Controls.Add(btnRemoveExcluded);
+            y += 120;
+
+            var txtExcludeId = new TextBox
+            {
+                Location  = new Point(0, y + 5),
+                Size      = new Size(452, 23),
+                BackColor = ThemeColors.DarkCharcoal,
+                ForeColor = ThemeColors.SecondaryText
+            };
+            _settingsPanel.Controls.Add(txtExcludeId);
+
+            var btnAddExcluded = BuildSettingsButton("Add", new Point(464, y));
+            btnAddExcluded.Size = new Size(76, 34);
+            btnAddExcluded.Click += (s, e) =>
+            {
+                string id = txtExcludeId.Text.Trim();
+                if (!ExcludedPackages.Add(id)) return;
+                txtExcludeId.Clear();
+                reloadExcluded();
+                AddLogEntry($"{id} excluded from updates.", ThemeColors.WarningOrange);
+            };
+            _settingsPanel.Controls.Add(btnAddExcluded);
+
+            _settingsPanel.AutoScroll = true;
 
             mainContentPanel.Controls.Add(_settingsPanel);
         }

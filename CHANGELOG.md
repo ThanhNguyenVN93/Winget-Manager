@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.0] — 2026-09-24
+
+### Added
+- **Exclude apps from updates** — right-click any row and choose "Exclude from updates"; the app is dropped from the scan results and skipped by the deep-check, so scans are also slightly faster
+- **"Excluded Apps" section in Settings** — view, add (by package Id) and remove excluded apps. The list is saved to `%AppData%\WingetManager\excluded.txt` and persists across restarts
+
+### Changed
+- Settings panel is now scrollable to fit the new section
+
+---
+
 ## [1.3.0] — 2026-09-11
 
 ### Added

@@ -130,6 +130,8 @@ namespace frm_winget_upgrade
 
             await RecheckMissedUpdatesAsync(updates, seenIds, progress, cancellationToken);
 
+            updates.RemoveAll(p => ExcludedPackages.IsExcluded(p.Id));
+
             foreach (var pkg in updates)
                 pkg.Track = VersionLockedId.IsMatch(pkg.Id) ? "Version-locked" : string.Empty;
 
@@ -151,7 +153,8 @@ namespace frm_winget_upgrade
             var    installed    = ParseInstalledOutput(rawInstalled, cancellationToken);
 
             var toRecheck = installed
-                .Where(p => !seenIds.Contains(p.Id) && !string.IsNullOrWhiteSpace(p.Name) &&
+                .Where(p => !seenIds.Contains(p.Id) && !ExcludedPackages.IsExcluded(p.Id) &&
+                            !string.IsNullOrWhiteSpace(p.Name) &&
                             !IsEdgeComponent(p.Name, p.Id) &&
                             (AppSettings.IncludeBetaVersions || !IsPreReleaseChannel(p.Name, p.Id)))
                 .ToList();
