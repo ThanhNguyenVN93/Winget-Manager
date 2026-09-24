@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.3] — 2026-09-24
+
+### Fixed
+- The header showed "Installed Packages" on startup while the Dashboard was active; it now reads "Dashboard"
+
+---
+
 ## [1.4.2] — 2026-09-24
 
 ### Added
