@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.1] — 2026-09-24
+
+### Fixed
+- Elapsed-time label stayed visible on the Settings and Logs views; it now hides with the progress bar
+- Dashboard/Updates showed the Installed list after visiting the Installed tab — update results are now kept separately
+- Clicking Check Updates or Refresh from the Installed tab crashed with "Index was out of range"; Check Updates now switches to Dashboard first and Refresh repopulates the correct grid
+- Elapsed timer stayed frozen at 00:00 while downloading an app update
+- "Errors Report" did nothing when the default browser handler failed under the admin token; it now falls back to `explorer.exe` and logs the link if both fail
+
+---
+
 ## [1.4.0] — 2026-09-24
 
 ### Added

@@ -41,6 +41,7 @@ namespace frm_winget_upgrade
         private          CancellationTokenSource _viewLoadCts;
         private          Panel               _settingsPanel;
         private          string              _activeView = "Dashboard";
+        private          List<WingetPackage> _updatePackages = new List<WingetPackage>();
         private          int                 _contextRowIndex = -1;
 
         private static readonly string _updateLogFilePath =
@@ -281,9 +282,7 @@ namespace frm_winget_upgrade
             WireNavButton(navInstalled, "Installed Packages", "Manage and update your Windows packages");
             WireNavButton(navUpdates,   "Available Updates",  "Packages ready for update");
             WireNavButton(navSettings,  "Settings",           "Configure Winget Manager preferences");
-            navLogs.Click += (s, e) => Process.Start(new ProcessStartInfo(
-                "https://docs.google.com/forms/d/e/1FAIpQLSeo-lrn9p7d1iRsUXW1JCWRhnNCeTpYmA9DSRbewbb5iHnbmA/viewform?usp=dialog")
-                { UseShellExecute = true });
+            navLogs.Click += (s, e) => OpenFeedbackForm();
 
             int btnX = overallProgress.Right + ThemeConstants.Spacing8;
             int btnW = mainContentPanel.ClientSize.Width - ThemeConstants.Spacing12 - btnX;
@@ -340,8 +339,39 @@ namespace frm_winget_upgrade
             if (_activeView != "Installed Packages") RemoveGridRowById(id);
         }
 
+        private const string FEEDBACK_URL =
+            "https://docs.google.com/forms/d/e/1FAIpQLSeo-lrn9p7d1iRsUXW1JCWRhnNCeTpYmA9DSRbewbb5iHnbmA/viewform?usp=dialog";
+
+        // Shell-executing a URL from an elevated process can fail when the default browser
+        // handler isn't registered for the admin token; explorer.exe resolves it in the user's shell.
+        private void OpenFeedbackForm()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(FEEDBACK_URL) { UseShellExecute = true });
+            }
+            catch
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo("explorer.exe", FEEDBACK_URL));
+                }
+                catch (Exception ex)
+                {
+                    AddLogEntry($"Could not open the feedback form: {ex.Message}", ThemeColors.ErrorRed);
+                    AddLogEntry($"Open it manually: {FEEDBACK_URL}", ThemeColors.InfoBlue);
+                }
+            }
+        }
+
         private async void BtnScanUpdates_Click(object sender, EventArgs e)
         {
+            if (_activeView != "Dashboard" && _activeView != "Available Updates")
+            {
+                HighlightNavButton(navDashboard);
+                NavigateTo("Dashboard", "Overview of your package management system");
+            }
+
             _viewLoadCts?.Cancel();
             _viewLoadCts?.Dispose();
             _viewLoadCts = new CancellationTokenSource();
@@ -366,7 +396,8 @@ namespace frm_winget_upgrade
                 return;
             }
             searchBox.Clear();
-            PopulateGrid(_allPackages);
+            if (_activeView == "Installed Packages") PopulateInstalledGrid(_allPackages);
+            else PopulateGrid(_allPackages);
             AddLogEntry($"Display refreshed — {_allPackages.Count} package(s).", ThemeColors.InfoBlue);
         }
 
@@ -416,7 +447,8 @@ namespace frm_winget_upgrade
 
                 if (_activeView != viewAtStart) return;
 
-                _allPackages = packages;
+                _allPackages    = packages;
+                _updatePackages = packages;
 
                 if (_allPackages.Count == 0)
                 {
@@ -478,6 +510,7 @@ namespace frm_winget_upgrade
             }
 
             AddLogEntry($"Downloading update {info.TagName}…", ThemeColors.InfoBlue);
+            SetControlsEnabled(false);
             try
             {
                 await _updateService.DownloadAndApplyUpdateAsync(info, new Progress<int>(UpdateProgress));
@@ -487,6 +520,10 @@ namespace frm_winget_upgrade
                 AddLogEntry($"Update failed: {ex.Message}", ThemeColors.ErrorRed);
                 MessageBox.Show($"Update failed:\n\n{ex.Message}", "Update Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (!IsDisposed) SetControlsEnabled(true);
             }
         }
 
@@ -499,7 +536,7 @@ namespace frm_winget_upgrade
             SetControlsEnabled(false);
             SetActionEnabled(false);
             packagesGrid.Rows.Clear();
-            _allPackages.Clear();
+            _allPackages = new List<WingetPackage>();
             UpdateProgress(0);
             AddLogEntry("Loading installed packages via winget…", ThemeColors.InfoBlue);
 
@@ -958,7 +995,7 @@ namespace frm_winget_upgrade
 
             var match = _allPackages.FirstOrDefault(p =>
                 string.Equals(p.Id, packageId, StringComparison.OrdinalIgnoreCase));
-            if (match != null) _allPackages.Remove(match);
+            if (match != null) { _allPackages.Remove(match); _updatePackages.Remove(match); }
 
             UpdateActionButtonEnabled();
         }
@@ -1125,6 +1162,7 @@ namespace frm_winget_upgrade
             else if (title == "Available Updates" || title == "Dashboard")
             {
                 InitializeUpdatesGrid();
+                _allPackages = _updatePackages;
                 if (_allPackages.Count > 0)
                     PopulateGrid(_allPackages);
                 SetActionEnabled(_allPackages.Any(
@@ -1143,6 +1181,7 @@ namespace frm_winget_upgrade
             searchBox.Visible         = false;
             packagesGrid.Visible      = false;
             lblProgressLabel.Visible  = false;
+            lblElapsed.Visible        = false;
             updateProgressBar.Visible = false;
             overallProgress.Visible   = false;
             if (_btnAction != null) _btnAction.Visible = false;
@@ -1166,6 +1205,7 @@ namespace frm_winget_upgrade
             searchBox.Visible         = true;
             packagesGrid.Visible      = true;
             lblProgressLabel.Visible  = true;
+            lblElapsed.Visible        = true;
             updateProgressBar.Visible = true;
             overallProgress.Visible   = true;
             if (_btnAction != null) _btnAction.Visible = true;
@@ -1181,6 +1221,7 @@ namespace frm_winget_upgrade
             searchBox.Visible         = false;
             packagesGrid.Visible      = false;
             lblProgressLabel.Visible  = false;
+            lblElapsed.Visible        = false;
             updateProgressBar.Visible = false;
             overallProgress.Visible   = false;
             if (_btnAction != null) _btnAction.Visible = false;
