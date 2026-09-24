@@ -265,7 +265,7 @@ namespace frm_winget_upgrade
             this.lblTitle.Name = "lblTitle";
             this.lblTitle.Size = new System.Drawing.Size(169, 25);
             this.lblTitle.TabIndex = 0;
-            this.lblTitle.Text = "Installed Packages";
+            this.lblTitle.Text = "Dashboard";
             // 
             // lblSubtitle
             // 
@@ -277,7 +277,7 @@ namespace frm_winget_upgrade
             this.lblSubtitle.Name = "lblSubtitle";
             this.lblSubtitle.Size = new System.Drawing.Size(244, 15);
             this.lblSubtitle.TabIndex = 1;
-            this.lblSubtitle.Text = "Manage and update your Windows packages";
+            this.lblSubtitle.Text = "Overview of your package management system";
             // 
             // btnRefresh
             // 
