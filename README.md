@@ -10,7 +10,23 @@ A modern, single-file Windows desktop GUI for **Windows Package Manager (winget)
 
 ## Screenshots
 
-> _Add screenshots here after first release._
+**Installed packages** — browse everything winget knows about, with search, sorting and batch uninstall.
+
+![Installed packages](docs/screenshots/installed.png)
+
+**Right-click a package** — read what's new, or exclude it from update scans.
+
+![Context menu](docs/screenshots/context-menu.png)
+
+**What's new** — release notes fetched on demand from winget, with a link to the release page.
+
+![What's new dialog](docs/screenshots/whats-new.png)
+
+**Settings** — upgrade options, maintenance tools, and the excluded-apps list.
+
+| | |
+|---|---|
+| ![Settings](docs/screenshots/settings.png) | ![Excluded apps](docs/screenshots/settings-excluded.png) |
 
 ---
 
