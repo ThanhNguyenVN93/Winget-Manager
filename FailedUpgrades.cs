@@ -25,6 +25,9 @@ namespace frm_winget_upgrade
         public static void Add(WingetPackage pkg)
         {
             if (pkg == null || string.IsNullOrWhiteSpace(pkg.Id)) return;
+            // Registry-only entries (ARP\...) can't be upgraded by Id; they're ghost rows that
+            // winget surfaces for a package already tracked under its real Id — don't pin them.
+            if (pkg.Id.StartsWith("ARP\\", StringComparison.OrdinalIgnoreCase)) return;
             lock (Gate)
             {
                 Items[pkg.Id] = pkg;
