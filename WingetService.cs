@@ -166,7 +166,23 @@ namespace frm_winget_upgrade
                 seenIds.Add(pkg.Id);
             }
 
-            await RecheckMissedUpdatesAsync(updates, seenIds, progress, cancellationToken);
+            var installedIds = await RecheckMissedUpdatesAsync(updates, seenIds, progress, cancellationToken);
+
+            // Keep previously-failed upgrades visible: winget drops them from the scan when
+            // their source errors. Only if still installed at the same version (else stale).
+            foreach (var failed in FailedUpgrades.All())
+            {
+                if (seenIds.Contains(failed.Id)) continue;
+                if (!installedIds.TryGetValue(failed.Id, out string curVersion) ||
+                    !string.Equals(curVersion, failed.InstalledVersion, StringComparison.OrdinalIgnoreCase))
+                {
+                    FailedUpgrades.Remove(failed.Id);
+                    continue;
+                }
+                failed.CurrentStatus = "✗ Failed";
+                updates.Add(failed);
+                seenIds.Add(failed.Id);
+            }
 
             updates.RemoveAll(p => ExcludedPackages.IsExcluded(p.Id));
 
@@ -184,11 +200,15 @@ namespace frm_winget_upgrade
         // Id, Source blank) — e.g. qBittorrent installed by its own installer rather than
         // winget — where the bulk scan's internal catalog match can fail silently the same way;
         // those have no queryable Id, so they're re-queried by display name instead.
-        private async Task RecheckMissedUpdatesAsync(List<WingetPackage> updates, HashSet<string> seenIds,
+        // Returns Id → installed version for everything winget lists as installed.
+        private async Task<Dictionary<string, string>> RecheckMissedUpdatesAsync(List<WingetPackage> updates, HashSet<string> seenIds,
                                                        IProgress<string> progress, CancellationToken cancellationToken)
         {
             string rawInstalled = await RunCommandAsync("list --accept-source-agreements");
             var    installed    = ParseInstalledOutput(rawInstalled, cancellationToken);
+
+            var installedIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in installed) installedIds[p.Id] = p.InstalledVersion;
 
             var toRecheck = installed
                 .Where(p => !seenIds.Contains(p.Id) && !ExcludedPackages.IsExcluded(p.Id) &&
@@ -197,7 +217,7 @@ namespace frm_winget_upgrade
                             (AppSettings.IncludeBetaVersions || !IsPreReleaseChannel(p.Name, p.Id)))
                 .ToList();
 
-            if (toRecheck.Count == 0) return;
+            if (toRecheck.Count == 0) return installedIds;
 
             progress?.Report($"Deep-checking {toRecheck.Count} package(s) individually — this can take a bit…");
 
@@ -228,6 +248,7 @@ namespace frm_winget_upgrade
                     updates.Add(pkg);
                 }
             }
+            return installedIds;
         }
 
         private List<WingetPackage> ParseUpgradeOutput(string raw, CancellationToken cancellationToken = default)
@@ -478,6 +499,16 @@ namespace frm_winget_upgrade
         private static readonly Regex MultipleVersionsError = new Regex(
             "Multiple versions of this package are installed", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // winget won't touch a user-scope package from an elevated process, and Winget Manager
+        // always runs elevated — surface that instead of leaving a bare "failed".
+        private static readonly Regex UserScopeElevatedError = new Regex(
+            "user scope cannot be .* when running with administrator", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Set when an installer returned 3010 (success, restart needed); cleared by the caller
+        // at the start of a session via ResetRebootFlag().
+        public bool RebootRequired { get; private set; }
+        public void ResetRebootFlag() => RebootRequired = false;
+
         // ── Upgrade ───────────────────────────────────────────────────────────
 
         public async Task<bool> UpgradePackageAsync(string packageId,
@@ -560,6 +591,7 @@ namespace frm_winget_upgrade
 
                         bool   textIndicatesFailure = false;
                         bool   ambiguousVersions     = false;
+                        bool   rebootRequired        = false;
                         string line;
 
                         while ((line = proc.StandardOutput.ReadLine()) != null)
@@ -573,13 +605,22 @@ namespace frm_winget_upgrade
                             string cleaned = AnsiEscape.Replace(line, string.Empty).Trim();
                             if (string.IsNullOrEmpty(cleaned)) continue;
 
-                            if (cleaned.IndexOf("failed",                      StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                cleaned.IndexOf("error",                        StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                cleaned.IndexOf("different install technology", StringComparison.OrdinalIgnoreCase) >= 0)
+                            // Some installers (e.g. PawnIO) return 3010 = success, reboot required, and
+                            // winget words it "Installer failed with exit code: 3010" — not a real failure.
+                            if (cleaned.IndexOf("exit code: 3010", StringComparison.OrdinalIgnoreCase) >= 0)
+                                rebootRequired = true;
+                            else if (cleaned.IndexOf("failed",                      StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                     cleaned.IndexOf("error",                        StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                     cleaned.IndexOf("different install technology", StringComparison.OrdinalIgnoreCase) >= 0)
                                 textIndicatesFailure = true;
 
                             if (MultipleVersionsError.IsMatch(cleaned))
                                 ambiguousVersions = true;
+
+                            if (UserScopeElevatedError.IsMatch(cleaned))
+                                progress?.Report("Hint: this package is installed for the current user only. " +
+                                                 "winget refuses to change it from an Administrator process — " +
+                                                 "run the same winget command from a normal (non-admin) terminal.");
 
                             progress?.Report(cleaned);
                         }
@@ -589,7 +630,13 @@ namespace frm_winget_upgrade
                         if (cancellationToken.IsCancellationRequested) return (false, false);
 
                         // Exit code 3010 = success, reboot required (Windows Installer standard).
-                        bool success = !textIndicatesFailure && (proc.ExitCode == 0 || proc.ExitCode == 3010);
+                        bool success = !textIndicatesFailure &&
+                                       (rebootRequired || proc.ExitCode == 0 || proc.ExitCode == 3010);
+                        if (success && (rebootRequired || proc.ExitCode == 3010))
+                        {
+                            RebootRequired = true;
+                            progress?.Report("Installed — a restart is required to finish.");
+                        }
                         return (success, ambiguousVersions);
                     }
                 }
