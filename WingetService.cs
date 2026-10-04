@@ -581,6 +581,7 @@ namespace frm_winget_upgrade
 
                         bool   textIndicatesFailure = false;
                         bool   ambiguousVersions     = false;
+                        bool   rebootRequired        = false;
                         string line;
 
                         while ((line = proc.StandardOutput.ReadLine()) != null)
@@ -594,9 +595,13 @@ namespace frm_winget_upgrade
                             string cleaned = AnsiEscape.Replace(line, string.Empty).Trim();
                             if (string.IsNullOrEmpty(cleaned)) continue;
 
-                            if (cleaned.IndexOf("failed",                      StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                cleaned.IndexOf("error",                        StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                cleaned.IndexOf("different install technology", StringComparison.OrdinalIgnoreCase) >= 0)
+                            // Some installers (e.g. PawnIO) return 3010 = success, reboot required, and
+                            // winget words it "Installer failed with exit code: 3010" — not a real failure.
+                            if (cleaned.IndexOf("exit code: 3010", StringComparison.OrdinalIgnoreCase) >= 0)
+                                rebootRequired = true;
+                            else if (cleaned.IndexOf("failed",                      StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                     cleaned.IndexOf("error",                        StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                     cleaned.IndexOf("different install technology", StringComparison.OrdinalIgnoreCase) >= 0)
                                 textIndicatesFailure = true;
 
                             if (MultipleVersionsError.IsMatch(cleaned))
@@ -610,7 +615,10 @@ namespace frm_winget_upgrade
                         if (cancellationToken.IsCancellationRequested) return (false, false);
 
                         // Exit code 3010 = success, reboot required (Windows Installer standard).
-                        bool success = !textIndicatesFailure && (proc.ExitCode == 0 || proc.ExitCode == 3010);
+                        bool success = !textIndicatesFailure &&
+                                       (rebootRequired || proc.ExitCode == 0 || proc.ExitCode == 3010);
+                        if (success && rebootRequired)
+                            progress?.Report("Installed — a restart is required to finish.");
                         return (success, ambiguousVersions);
                     }
                 }
