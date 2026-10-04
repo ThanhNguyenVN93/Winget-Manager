@@ -65,6 +65,7 @@
     <Compile Include="DonateSettings.cs" />
     <Compile Include="ExcludedPackages.cs" />
     <Compile Include="FailedUpgrades.cs" />
+    <Compile Include="PathRepair.cs" />
     <Compile Include="ReleaseNotesDialog.cs" />
     <Compile Include="frmDonate.cs">
       <SubType>Form</SubType>

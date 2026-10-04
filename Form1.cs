@@ -318,7 +318,10 @@ namespace frm_winget_upgrade
             itemExclude.Click += (s, e) => ExcludeRow(_contextRowIndex);
             var itemNotes = new ToolStripMenuItem("📝  What's new");
             itemNotes.Click += async (s, e) => await ShowReleaseNotesAsync(_contextRowIndex);
+            var itemRetry = new ToolStripMenuItem("🔁  Select all failed");
+            itemRetry.Click += (s, e) => SelectFailedRows();
             menu.Items.Add(itemNotes);
+            menu.Items.Add(itemRetry);
             menu.Items.Add(itemExclude);
             packagesGrid.CellMouseDown += (s, e) =>
             {
@@ -328,6 +331,23 @@ namespace frm_winget_upgrade
                 packagesGrid.Rows[e.RowIndex].Selected = true;
                 menu.Show(Cursor.Position);
             };
+        }
+
+        // Ticks every row whose last upgrade failed so "Upgrade Selected" retries them together.
+        private void SelectFailedRows()
+        {
+            if (_activeView == "Installed Packages") return;
+            int n = 0;
+            foreach (DataGridViewRow row in packagesGrid.Rows)
+            {
+                if (!row.Visible || row.Cells[COL_SELECT].ReadOnly) continue;
+                if (row.Cells[COL_STATUS].Value?.ToString().Contains("Failed") != true) continue;
+                row.Cells[COL_SELECT].Value = true;
+                n++;
+            }
+            AddLogEntry(n == 0 ? "No failed packages to retry." : $"{n} failed package(s) selected for retry.",
+                        ThemeColors.InfoBlue);
+            UpdateActionButtonEnabled();
         }
 
         private async Task ShowReleaseNotesAsync(int rowIndex)
@@ -775,6 +795,7 @@ namespace frm_winget_upgrade
             var token = _cts.Token;
 
             _currentLogFilePath = _updateLogFilePath;
+            _service.ResetRebootFlag();
             SetControlsEnabled(false);
             SetActionEnabled(false);
             UpdateProgress(0);
@@ -831,6 +852,15 @@ namespace frm_winget_upgrade
                 _cts.Dispose();
                 _cts = null;
             }
+
+            if (succeeded > 0)
+            {
+                foreach (var (oldPath, newPath) in await Task.Run(() => PathRepair.RepairUserPath()))
+                    AddLogEntry($"PATH repaired: {oldPath} → {newPath}", ThemeColors.WarningOrange);
+            }
+
+            if (_service.RebootRequired && !IsDisposed)
+                AddLogEntry("⚠ A restart is required to finish installing one or more packages.", ThemeColors.WarningOrange);
 
             FinishBulkOperation("upgrade", succeeded, failed, wasCancelled, targets.Count);
 

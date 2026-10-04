@@ -499,6 +499,16 @@ namespace frm_winget_upgrade
         private static readonly Regex MultipleVersionsError = new Regex(
             "Multiple versions of this package are installed", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // winget won't touch a user-scope package from an elevated process, and Winget Manager
+        // always runs elevated — surface that instead of leaving a bare "failed".
+        private static readonly Regex UserScopeElevatedError = new Regex(
+            "user scope cannot be .* when running with administrator", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Set when an installer returned 3010 (success, restart needed); cleared by the caller
+        // at the start of a session via ResetRebootFlag().
+        public bool RebootRequired { get; private set; }
+        public void ResetRebootFlag() => RebootRequired = false;
+
         // ── Upgrade ───────────────────────────────────────────────────────────
 
         public async Task<bool> UpgradePackageAsync(string packageId,
@@ -607,6 +617,11 @@ namespace frm_winget_upgrade
                             if (MultipleVersionsError.IsMatch(cleaned))
                                 ambiguousVersions = true;
 
+                            if (UserScopeElevatedError.IsMatch(cleaned))
+                                progress?.Report("Hint: this package is installed for the current user only. " +
+                                                 "winget refuses to change it from an Administrator process — " +
+                                                 "run the same winget command from a normal (non-admin) terminal.");
+
                             progress?.Report(cleaned);
                         }
 
@@ -617,8 +632,11 @@ namespace frm_winget_upgrade
                         // Exit code 3010 = success, reboot required (Windows Installer standard).
                         bool success = !textIndicatesFailure &&
                                        (rebootRequired || proc.ExitCode == 0 || proc.ExitCode == 3010);
-                        if (success && rebootRequired)
+                        if (success && (rebootRequired || proc.ExitCode == 3010))
+                        {
+                            RebootRequired = true;
                             progress?.Report("Installed — a restart is required to finish.");
+                        }
                         return (success, ambiguousVersions);
                     }
                 }
