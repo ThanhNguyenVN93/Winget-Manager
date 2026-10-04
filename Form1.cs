@@ -804,6 +804,7 @@ namespace frm_winget_upgrade
                     if (ok)
                     {
                         succeeded++;
+                        FailedUpgrades.Remove(pkg.Id);
                         if (rowIdx >= 0)
                             SetPackageStatus(rowIdx, pkg.Id, "✓ Done", ThemeColors.SuccessGreen, Color.Black);
                         AddLogEntry($"✓ {pkg.Name} — upgraded successfully.", ThemeColors.SuccessGreen);
@@ -811,6 +812,7 @@ namespace frm_winget_upgrade
                     else
                     {
                         failed++;
+                        FailedUpgrades.Add(pkg);
                         if (rowIdx >= 0)
                             SetPackageStatus(rowIdx, pkg.Id, "✗ Failed", ThemeColors.ErrorRed, Color.White);
                         AddLogEntry($"✗ {pkg.Name} — upgrade failed.", ThemeColors.ErrorRed);
@@ -975,7 +977,15 @@ namespace frm_winget_upgrade
             string logPath = string.Equals(verb, "uninstall", StringComparison.OrdinalIgnoreCase)
                 ? _uninstallLogFilePath : _updateLogFilePath;
             if (failed > 0 && File.Exists(logPath))
-                Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
+            {
+                // No app may be associated with the log's extension — never let that crash the app.
+                try { Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true }); }
+                catch
+                {
+                    try { Process.Start(new ProcessStartInfo("notepad.exe", $"\"{logPath}\"")); }
+                    catch { AddLogEntry($"Log file: {logPath}", ThemeColors.InfoBlue); }
+                }
+            }
         }
 
         // Called via Progress<string> — always marshalled through BeginInvoke.

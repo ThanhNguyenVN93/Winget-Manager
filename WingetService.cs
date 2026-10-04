@@ -166,7 +166,23 @@ namespace frm_winget_upgrade
                 seenIds.Add(pkg.Id);
             }
 
-            await RecheckMissedUpdatesAsync(updates, seenIds, progress, cancellationToken);
+            var installedIds = await RecheckMissedUpdatesAsync(updates, seenIds, progress, cancellationToken);
+
+            // Keep previously-failed upgrades visible: winget drops them from the scan when
+            // their source errors. Only if still installed at the same version (else stale).
+            foreach (var failed in FailedUpgrades.All())
+            {
+                if (seenIds.Contains(failed.Id)) continue;
+                if (!installedIds.TryGetValue(failed.Id, out string curVersion) ||
+                    !string.Equals(curVersion, failed.InstalledVersion, StringComparison.OrdinalIgnoreCase))
+                {
+                    FailedUpgrades.Remove(failed.Id);
+                    continue;
+                }
+                failed.CurrentStatus = "✗ Failed";
+                updates.Add(failed);
+                seenIds.Add(failed.Id);
+            }
 
             updates.RemoveAll(p => ExcludedPackages.IsExcluded(p.Id));
 
@@ -184,11 +200,15 @@ namespace frm_winget_upgrade
         // Id, Source blank) — e.g. qBittorrent installed by its own installer rather than
         // winget — where the bulk scan's internal catalog match can fail silently the same way;
         // those have no queryable Id, so they're re-queried by display name instead.
-        private async Task RecheckMissedUpdatesAsync(List<WingetPackage> updates, HashSet<string> seenIds,
+        // Returns Id → installed version for everything winget lists as installed.
+        private async Task<Dictionary<string, string>> RecheckMissedUpdatesAsync(List<WingetPackage> updates, HashSet<string> seenIds,
                                                        IProgress<string> progress, CancellationToken cancellationToken)
         {
             string rawInstalled = await RunCommandAsync("list --accept-source-agreements");
             var    installed    = ParseInstalledOutput(rawInstalled, cancellationToken);
+
+            var installedIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in installed) installedIds[p.Id] = p.InstalledVersion;
 
             var toRecheck = installed
                 .Where(p => !seenIds.Contains(p.Id) && !ExcludedPackages.IsExcluded(p.Id) &&
@@ -197,7 +217,7 @@ namespace frm_winget_upgrade
                             (AppSettings.IncludeBetaVersions || !IsPreReleaseChannel(p.Name, p.Id)))
                 .ToList();
 
-            if (toRecheck.Count == 0) return;
+            if (toRecheck.Count == 0) return installedIds;
 
             progress?.Report($"Deep-checking {toRecheck.Count} package(s) individually — this can take a bit…");
 
@@ -228,6 +248,7 @@ namespace frm_winget_upgrade
                     updates.Add(pkg);
                 }
             }
+            return installedIds;
         }
 
         private List<WingetPackage> ParseUpgradeOutput(string raw, CancellationToken cancellationToken = default)
