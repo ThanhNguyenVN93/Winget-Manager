@@ -556,6 +556,22 @@ namespace frm_winget_upgrade
             return retryOk;
         }
 
+        // ── Version pins ──────────────────────────────────────────────────────
+
+        // Raw `winget pin list` output (empty list text when nothing is pinned).
+        public Task<string> GetPinListAsync() => RunCommandAsync("pin list --accept-source-agreements");
+
+        // Removes winget's version pin so the package can be upgraded again. Returns false
+        // when the package has no pin or winget refuses (the reason is streamed to progress).
+        public async Task<bool> RemovePinAsync(string packageId,
+                                                CancellationToken cancellationToken = default,
+                                                IProgress<string> progress = null)
+        {
+            var (ok, _) = await RunWingetOperationAsync(
+                $"pin remove --id \"{packageId}\" --accept-source-agreements", cancellationToken, progress);
+            return ok;
+        }
+
         // ── Source reset ──────────────────────────────────────────────────────
 
         public async Task<bool> ResetSourcesAsync(CancellationToken cancellationToken = default,
