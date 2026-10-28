@@ -290,6 +290,9 @@ namespace frm_winget_upgrade
                     : string.Empty;
 
                 if (string.IsNullOrWhiteSpace(id)) continue;
+                // Registry-only entries (ARP\...) have no catalog Id, so `upgrade --id` always
+                // fails on them (0x8a150044) — listing them only offers an update that can't run.
+                if (id.Trim().StartsWith("ARP\\", StringComparison.OrdinalIgnoreCase)) continue;
                 if (IsEdgeComponent(name.Trim(), id.Trim())) continue;
                 if (!AppSettings.IncludeBetaVersions && IsPreReleaseChannel(name.Trim(), id.Trim())) continue;
 
