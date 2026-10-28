@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.5] — 2026-10-28
+
+### Added
+- **Settings are remembered** — Silent, Force, Accept agreements and Include beta/pre-release are saved to `%APPDATA%\WingetManager\settings.ini`
+- **Pin management** — right-click a package: *Remove version pin*, *Show pinned packages*, *Select version-locked too*
+- **Select all failed** — right-click menu item that ticks every ✗ Failed row so they can be retried together
+- **PATH repair** — after an upgrade, stale `WinGet\Packages\...` entries in the user PATH are repointed at the new version folder
+- **Restart notice** — installers that return 3010 are reported as "restart required" instead of failed
+
+### Fixed
+- The app crashed ("Fatal Error") after an upgrade session with failures when no program was associated with the log file; it now falls back to Notepad
+- A package whose upgrade failed vanished on the next scan; failed upgrades now stay listed until they succeed, are removed, or a newer copy is installed
+- Exit code 3010 (success, reboot required) was shown as a failure
+- Registry-only packages (`ARP\...`, e.g. Bun) failed with `0x8a150044`; they are now upgraded with `--source winget --include-unknown`
+- Hint added when winget refuses to change a user-scope package from the elevated app
+
+---
+
 ## [1.4.4] — 2026-09-24
 
 ### Fixed
