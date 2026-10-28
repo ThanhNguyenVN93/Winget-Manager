@@ -320,7 +320,16 @@ namespace frm_winget_upgrade
             itemNotes.Click += async (s, e) => await ShowReleaseNotesAsync(_contextRowIndex);
             var itemRetry = new ToolStripMenuItem("🔁  Select all failed");
             itemRetry.Click += (s, e) => SelectFailedRows();
+            var itemUnpin = new ToolStripMenuItem("📌  Remove version pin");
+            itemUnpin.Click += async (s, e) => await RemovePinAsync(_contextRowIndex);
+            var itemPins = new ToolStripMenuItem("📋  Show pinned packages");
+            itemPins.Click += async (s, e) => await ShowPinListAsync();
+            var itemLocked = new ToolStripMenuItem("🔓  Select version-locked too");
+            itemLocked.Click += (s, e) => SelectVersionLockedRows();
             menu.Items.Add(itemNotes);
+            menu.Items.Add(itemUnpin);
+            menu.Items.Add(itemPins);
+            menu.Items.Add(itemLocked);
             menu.Items.Add(itemRetry);
             menu.Items.Add(itemExclude);
             packagesGrid.CellMouseDown += (s, e) =>
@@ -331,6 +340,66 @@ namespace frm_winget_upgrade
                 packagesGrid.Rows[e.RowIndex].Selected = true;
                 menu.Show(Cursor.Position);
             };
+        }
+
+        // Drops winget's version pin for the row's package so it can be upgraded again.
+        private async Task RemovePinAsync(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= packagesGrid.Rows.Count || _isBusy) return;
+
+            string id   = packagesGrid.Rows[rowIndex].Cells[COL_ID].Value?.ToString();
+            string name = packagesGrid.Rows[rowIndex].Cells[COL_NAME].Value?.ToString();
+            if (string.IsNullOrWhiteSpace(id)) return;
+
+            _isBusy = true;
+            SetControlsEnabled(false);
+            AddLogEntry($"Removing version pin for {name} [{id}]…", ThemeColors.InfoBlue);
+            try
+            {
+                bool ok = await _service.RemovePinAsync(id, CancellationToken.None, new Progress<string>(AppendRawLog));
+                if (IsDisposed) return;
+
+                if (ok)
+                    AddLogEntry($"✓ Pin removed for {name} — tick it and press Upgrade Selected.", ThemeColors.SuccessGreen);
+                else
+                    AddLogEntry($"{name} has no winget pin (or it couldn't be removed). A \"Version-locked\" " +
+                                "label only means the Id ends in a version number — it is skipped by Select All, " +
+                                "but you can tick it and upgrade directly.", ThemeColors.WarningOrange);
+            }
+            finally
+            {
+                _isBusy = false;
+                if (!IsDisposed) SetControlsEnabled(true);
+            }
+        }
+
+        private async Task ShowPinListAsync()
+        {
+            if (_isBusy) return;
+            AddLogEntry("Reading winget pin list…", ThemeColors.InfoBlue);
+            string raw = await _service.GetPinListAsync();
+            if (IsDisposed) return;
+
+            foreach (var line in raw.Replace("\r", string.Empty).Split('\n'))
+                if (!string.IsNullOrWhiteSpace(line) && line.Any(char.IsLetterOrDigit))
+                    AppendRawLog(line.TrimEnd());
+        }
+
+        // Select-all skips version-locked rows on purpose; this ticks them as well.
+        private void SelectVersionLockedRows()
+        {
+            if (_activeView == "Installed Packages") return;   // no Track column there
+            int n = 0;
+            foreach (DataGridViewRow row in packagesGrid.Rows)
+            {
+                if (!row.Visible || row.Cells[COL_SELECT].ReadOnly ||
+                    string.IsNullOrEmpty(row.Cells[COL_TRACK].Value?.ToString())) continue;
+                row.Cells[COL_SELECT].Value = true;
+                n++;
+            }
+            AddLogEntry(n == 0 ? "No version-locked packages in this list."
+                               : $"{n} version-locked package(s) selected.", ThemeColors.InfoBlue);
+            UpdateActionButtonEnabled();
         }
 
         // Ticks every row whose last upgrade failed so "Upgrade Selected" retries them together.
