@@ -169,12 +169,14 @@ namespace frm_winget_upgrade
             var installedIds = await RecheckMissedUpdatesAsync(updates, seenIds, progress, cancellationToken);
 
             // Keep previously-failed upgrades visible: winget drops them from the scan when
-            // their source errors. Only if still installed at the same version (else stale).
+            // their source errors. Only if still installed at the same version and nothing else
+            // under that Id is installed at another version (a newer copy supersedes it, and a
+            // leftover registry entry of the old one must not keep it listed).
             foreach (var failed in FailedUpgrades.All())
             {
                 if (seenIds.Contains(failed.Id)) continue;
-                if (!installedIds.TryGetValue(failed.Id, out string curVersion) ||
-                    !string.Equals(curVersion, failed.InstalledVersion, StringComparison.OrdinalIgnoreCase))
+                if (!installedIds.TryGetValue(failed.Id, out var versions) ||
+                    versions.Count != 1 || !versions.Contains(failed.InstalledVersion))
                 {
                     FailedUpgrades.Remove(failed.Id);
                     continue;
@@ -200,15 +202,20 @@ namespace frm_winget_upgrade
         // Id, Source blank) — e.g. qBittorrent installed by its own installer rather than
         // winget — where the bulk scan's internal catalog match can fail silently the same way;
         // those have no queryable Id, so they're re-queried by display name instead.
-        // Returns Id → installed version for everything winget lists as installed.
-        private async Task<Dictionary<string, string>> RecheckMissedUpdatesAsync(List<WingetPackage> updates, HashSet<string> seenIds,
+        // Returns Id → every installed version winget lists under that Id.
+        private async Task<Dictionary<string, HashSet<string>>> RecheckMissedUpdatesAsync(List<WingetPackage> updates, HashSet<string> seenIds,
                                                        IProgress<string> progress, CancellationToken cancellationToken)
         {
             string rawInstalled = await RunCommandAsync("list --accept-source-agreements");
             var    installed    = ParseInstalledOutput(rawInstalled, cancellationToken);
 
-            var installedIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var p in installed) installedIds[p.Id] = p.InstalledVersion;
+            var installedIds = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in installed)
+            {
+                if (!installedIds.TryGetValue(p.Id, out var set))
+                    installedIds[p.Id] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                set.Add(p.InstalledVersion);
+            }
 
             var toRecheck = installed
                 .Where(p => !seenIds.Contains(p.Id) && !ExcludedPackages.IsExcluded(p.Id) &&
