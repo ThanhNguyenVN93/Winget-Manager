@@ -519,6 +519,13 @@ namespace frm_winget_upgrade
         {
             var args = new StringBuilder($"upgrade --id \"{packageId}\"");
             if (IsMsStoreSource(source))      args.Append(" --source msstore");
+            else if (IsRegistryOnlyId(packageId))
+            {
+                // Registry-only entry (ARP\...): with no source winget also queries msstore, which
+                // errors out (0x8a150044) on machines where that source is broken. Pinning it to
+                // winget matches the package, and --include-unknown covers its undetectable version.
+                args.Append(" --source winget --include-unknown");
+            }
             if (AppSettings.SilentMode)       args.Append(" --silent");
             if (AppSettings.ForceInstall)     args.Append(" --force");
             if (AppSettings.AcceptAgreements) args.Append(" --accept-package-agreements --accept-source-agreements");
@@ -531,6 +538,9 @@ namespace frm_winget_upgrade
             var (retryOk, _) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
             return retryOk;
         }
+
+        private static bool IsRegistryOnlyId(string id) =>
+            id != null && id.StartsWith("ARP\\", StringComparison.OrdinalIgnoreCase);
 
         private static bool IsMsStoreSource(string source) =>
             string.Equals(source, "msstore", StringComparison.OrdinalIgnoreCase);
