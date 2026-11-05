@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.6] — 2026-11-05
+
+### Added
+- **Start with Windows** — Settings option that registers a logon Scheduled Task (falls back to a registry Run key if that fails) to launch the app hidden in the system tray, where it checks for updates silently and shows a balloon tip instead of opening the main window
+
+---
+
 ## [1.4.5] — 2026-10-28
 
 ### Added
