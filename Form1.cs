@@ -62,8 +62,15 @@ namespace frm_winget_upgrade
         private readonly System.Windows.Forms.Timer _elapsedTimer;
         private          DateTime                   _elapsedStartedAt;
 
-        public Form1()
+        private readonly bool       _startInTray;
+        private          NotifyIcon _trayIcon;
+        private          bool       _allowExit;
+
+        public Form1() : this(false) { }
+
+        public Form1(bool startInTray)
         {
+            _startInTray = startInTray;
             InitializeComponent();
             using (var s = System.Reflection.Assembly.GetExecutingAssembly()
                                .GetManifestResourceStream("frm_winget_upgrade.winget_manager.ico"))
@@ -74,6 +81,11 @@ namespace frm_winget_upgrade
             _searchDebounce.Tick += SearchDebounce_Tick;
             _elapsedTimer         = new System.Windows.Forms.Timer { Interval = 1000 };
             _elapsedTimer.Tick   += ElapsedTimer_Tick;
+            if (_startInTray)
+            {
+                this.WindowState   = FormWindowState.Minimized;
+                this.ShowInTaskbar = false;
+            }
             this.Load        += Form1_Load;
             this.Resize      += Form1_Resize;
             this.FormClosing += Form1_FormClosing;
@@ -81,8 +93,19 @@ namespace frm_winget_upgrade
 
         private async void Form1_Load(object sender, EventArgs e)
         {
+            if (_startInTray) this.Hide();
+
             if (!IsRunningAsAdministrator())
             {
+                // Started unattended at logon (via the registry fallback, since the scheduled
+                // task already runs elevated) — relaunch elevated without an interactive prompt.
+                if (_startInTray)
+                {
+                    TryRestartAsAdministrator(_startInTray);
+                    Application.Exit();
+                    return;
+                }
+
                 var choice = MessageBox.Show(
                     "Winget Manager requires Administrator privileges to install " +
                     "and upgrade system packages.\n\n" +
@@ -92,7 +115,7 @@ namespace frm_winget_upgrade
                     MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button1);
 
-                if (choice == DialogResult.Yes) TryRestartAsAdministrator();
+                if (choice == DialogResult.Yes) TryRestartAsAdministrator(_startInTray);
                 Application.Exit();
                 return;
             }
@@ -103,6 +126,14 @@ namespace frm_winget_upgrade
                 InitializeUpdatesGrid();
                 EnableGridDoubleBuffering(packagesGrid);
                 SetupEventHandlers();
+
+                if (_startInTray)
+                {
+                    SetupTrayIcon();
+                    await ScanForUpdatesAsync();
+                    NotifyTrayUpdateResult();
+                    return;
+                }
 
                 // Check the app itself first — if the user accepts, DownloadAndApplyUpdateAsync
                 // exits the process before we'd ever reach the package scan below, so there's
@@ -119,6 +150,13 @@ namespace frm_winget_upgrade
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
+            if (_trayIcon != null && !_allowExit)
+            {
+                e.Cancel = true;
+                this.Hide();
+                return;
+            }
+
             if (_isBusy)
             {
                 var choice = MessageBox.Show(
@@ -131,6 +169,48 @@ namespace frm_winget_upgrade
                 if (choice == DialogResult.No) { e.Cancel = true; return; }
                 _cts?.Cancel();
             }
+
+            _trayIcon?.Dispose();
+        }
+
+        // ── System tray ───────────────────────────────────────────────────────
+
+        private void SetupTrayIcon()
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Open Winget Manager", null, (s, e) => RestoreFromTray());
+            menu.Items.Add("Check for Updates Now", null, async (s, e) =>
+            {
+                await ScanForUpdatesAsync();
+                NotifyTrayUpdateResult();
+            });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Exit", null, (s, e) => { _allowExit = true; Close(); });
+
+            _trayIcon = new NotifyIcon
+            {
+                Icon             = this.Icon,
+                Text             = "Winget Manager",
+                Visible          = true,
+                ContextMenuStrip = menu
+            };
+            _trayIcon.DoubleClick += (s, e) => RestoreFromTray();
+        }
+
+        private void RestoreFromTray()
+        {
+            this.Show();
+            this.ShowInTaskbar = true;
+            this.WindowState   = FormWindowState.Normal;
+            this.Activate();
+        }
+
+        private void NotifyTrayUpdateResult()
+        {
+            if (_trayIcon == null || IsDisposed) return;
+            if (_updatePackages.Count > 0)
+                _trayIcon.ShowBalloonTip(5000, "Winget Manager",
+                    $"{_updatePackages.Count} update(s) available.", ToolTipIcon.Info);
         }
 
         private static bool IsRunningAsAdministrator()
@@ -139,13 +219,14 @@ namespace frm_winget_upgrade
                 return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
         }
 
-        private static void TryRestartAsAdministrator()
+        private static void TryRestartAsAdministrator(bool startInTray)
         {
             try
             {
                 Process.Start(new ProcessStartInfo
                 {
                     FileName        = Application.ExecutablePath,
+                    Arguments       = startInTray ? "--tray" : string.Empty,
                     UseShellExecute = true,
                     Verb            = "runas"
                 });
@@ -1431,6 +1512,17 @@ namespace frm_winget_upgrade
                 AppSettings.IncludeBetaVersions, y);
             chkBeta.CheckedChanged += (s, e) => AppSettings.IncludeBetaVersions = chkBeta.Checked;
             _settingsPanel.Controls.Add(chkBeta);
+            y += 34;
+
+            var chkStartup = BuildCheckBox(
+                "Start with Windows  (runs in the system tray and checks for updates silently)",
+                StartupManager.IsEnabled(), y);
+            chkStartup.CheckedChanged += (s, e) =>
+            {
+                if (chkStartup.Checked) StartupManager.Enable();
+                else StartupManager.Disable();
+            };
+            _settingsPanel.Controls.Add(chkStartup);
             y += 50;
 
             _settingsPanel.Controls.Add(new Label

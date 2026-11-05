@@ -8,7 +8,7 @@ namespace frm_winget_upgrade
     internal static class Program
     {
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             // Must be registered before any Guna type is loaded by the JIT.
             // When the EXE runs without side-by-side DLL files the CLR fires
@@ -44,7 +44,8 @@ namespace frm_winget_upgrade
                     return;
                 }
 
-                try { Application.Run(new Form1()); }
+                bool startInTray = Array.IndexOf(args, "--tray") >= 0;
+                try { Application.Run(new Form1(startInTray)); }
                 catch (Exception ex) { ShowFatalError(ex); }
             }
         }
