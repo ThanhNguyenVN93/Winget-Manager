@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.8] — 2026-11-12
+
+### Fixed
+- **Visual C++ Redistributable AIO** kept showing as *Not installed / Install Available* after a successful install. The AIO only installs the individual Microsoft runtimes and leaves nothing winget can detect, so the app now remembers the version it installed and only offers a newer AIO release
+
+---
+
 ## [1.4.7] — 2026-11-12
 
 ### Added
