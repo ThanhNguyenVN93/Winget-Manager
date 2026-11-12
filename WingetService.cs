@@ -264,25 +264,64 @@ namespace frm_winget_upgrade
 
         private const string VcRedistAioId = "abbodi1406.vcredist";
 
-        // One install covers every VC++ runtime (2005–2026, x86/x64); once installed it is tracked
-        // by the regular upgrade scan, so it is only offered here while missing.
+        // The AIO repack installs the individual Microsoft runtimes and registers nothing under its
+        // own Id, so winget never reports it as installed (or upgradable). The version installed
+        // through this app is remembered here instead, and a newer AIO release is offered again.
+        private static readonly string VcRedistAioStatePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "WingetManager", "vcredist_aio_version.txt");
+
+        private string _vcRedistAioOffered;
+
         private async Task<WingetPackage> GetVcRedistAioAsync()
         {
             string raw   = await RunCommandAsync($"show --id \"{VcRedistAioId}\" --exact --accept-source-agreements");
             var    match = Regex.Match(raw, @"^Version:\s*(\S+)", RegexOptions.Multiline);
             if (!match.Success) return null;
 
+            string available = match.Groups[1].Value;
+            string installed = ReadInstalledVcRedistAio();
+            if (installed != null && !IsNewerVersion(available, installed)) return null;
+
+            _vcRedistAioOffered = available;
             return new WingetPackage
             {
                 Name             = "Visual C++ Redistributable AIO",
                 Id               = VcRedistAioId,
-                InstalledVersion = "Not installed",
-                AvailableVersion = match.Groups[1].Value,
+                InstalledVersion = installed ?? "Not installed",
+                AvailableVersion = available,
                 Source           = "winget",
-                CurrentStatus    = "⬆ Install Available",
+                CurrentStatus    = installed == null ? "⬆ Install Available" : "⬆ Update Available",
                 IsNewInstall     = true
             };
         }
+
+        private static string ReadInstalledVcRedistAio()
+        {
+            try
+            {
+                if (!File.Exists(VcRedistAioStatePath)) return null;
+                string v = File.ReadAllText(VcRedistAioStatePath).Trim();
+                return v.Length == 0 ? null : v;
+            }
+            catch { return null; }
+        }
+
+        private void RememberInstalledVcRedistAio()
+        {
+            if (string.IsNullOrEmpty(_vcRedistAioOffered)) return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(VcRedistAioStatePath));
+                File.WriteAllText(VcRedistAioStatePath, _vcRedistAioOffered);
+            }
+            catch { }
+        }
+
+        private static bool IsNewerVersion(string candidate, string current) =>
+            Version.TryParse(candidate, out var a) && Version.TryParse(current, out var b)
+                ? a > b
+                : !string.Equals(candidate, current, StringComparison.OrdinalIgnoreCase);
 
         // The bulk "upgrade" scan silently drops a package when winget's own name-matching
         // finds several candidates for it (e.g. multiple "qBittorrent" listings in the source) —
@@ -725,6 +764,9 @@ namespace frm_winget_upgrade
 
             if (ok && _appRestartNeeded) PendingAppRestartIds.Add(packageId);
             else if (ok) PendingAppRestartIds.Remove(packageId);
+
+            if (ok && string.Equals(packageId, VcRedistAioId, StringComparison.OrdinalIgnoreCase))
+                RememberInstalledVcRedistAio();
             return ok;
         }
 
