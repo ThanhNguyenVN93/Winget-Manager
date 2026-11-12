@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -27,6 +28,9 @@ namespace frm_winget_upgrade
         // Non-empty when the package Id names a fixed version line (e.g. OpenJS.NodeJS.22) —
         // its updates stay within that line, so it's excluded from "Select All" by default.
         public string Track { get; set; } = string.Empty;
+
+        // Not installed yet — offered via `winget install` instead of `winget upgrade`.
+        public bool IsNewInstall { get; set; }
 
         // Mutable runtime status — kept in sync with the grid cell so that
         // row-visibility filtering never loses live state mid-upgrade.
@@ -59,6 +63,9 @@ namespace frm_winget_upgrade
             @"\.\d+(\.\d+){0,2}$", RegexOptions.Compiled);
 
         private const int FallbackRecheckConcurrency = 6;
+        private const int HeartbeatInterval          = 120_000;
+        private const int CommandTimeoutMs           = 300_000;
+        private const int RecheckTimeoutMs           = 120_000;
 
         // Edge components are serviced by Windows Update, not winget — attempting to upgrade
         // them through winget consistently fails (e.g. "REST API endpoint not found"), so
@@ -79,38 +86,92 @@ namespace frm_winget_upgrade
 
         // ── Raw command runner ────────────────────────────────────────────────
 
-        public async Task<string> RunCommandAsync(string arguments)
+        public async Task<string> RunCommandAsync(string arguments, int timeoutMs = CommandTimeoutMs)
         {
             return await Task.Run(() =>
             {
-                var psi = new ProcessStartInfo
-                {
-                    FileName               = Exe,
-                    Arguments              = arguments,
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                    CreateNoWindow         = true,
-                    StandardOutputEncoding = new UTF8Encoding(false, false),
-                    StandardErrorEncoding  = new UTF8Encoding(false, false)
-                };
-
                 var sb = new StringBuilder(8192);
                 try
                 {
-                    using (var proc = Process.Start(psi))
-                    {
-                        if (proc == null) return "[ERROR] Process.Start returned null.";
-                        sb.Append(proc.StandardOutput.ReadToEnd());
-                        proc.WaitForExit();
-                    }
+                    RunProcess(arguments, line => { lock (sb) sb.AppendLine(line); }, CancellationToken.None, timeoutMs);
+                }
+                catch (TimeoutException)
+                {
+                    return $"[ERROR] winget did not respond within {timeoutMs / 60000} min (winget {arguments}).";
                 }
                 catch (Exception ex)
                 {
                     return $"[ERROR] Cannot launch winget: {ex.Message}";
                 }
-                return sb.ToString();
+                lock (sb) return sb.ToString();
             });
+        }
+
+        // Streams are read asynchronously and the wait is on the process itself, not on stream EOF:
+        // an installer winget spawns (e.g. Visual Studio's) can inherit the pipe and hold it open
+        // long after winget has exited, which used to block ReadLine() forever.
+        private static int RunProcess(string arguments, Action<string> onLine,
+                                      CancellationToken cancellationToken, int timeoutMs)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName               = Exe,
+                Arguments              = arguments,
+                UseShellExecute        = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                CreateNoWindow         = true,
+                StandardOutputEncoding = new UTF8Encoding(false, false),
+                StandardErrorEncoding  = new UTF8Encoding(false, false)
+            };
+
+            var  proc     = new Process { StartInfo = psi };
+            var  outDone  = new ManualResetEventSlim();
+            var  errDone  = new ManualResetEventSlim();
+            bool finished = false;
+
+            // Not disposed on purpose: a leaked pipe can still raise these after we return.
+            proc.OutputDataReceived += (s, e) => { if (e.Data == null) outDone.Set(); else if (!finished) onLine(e.Data); };
+            proc.ErrorDataReceived  += (s, e) => { if (e.Data == null) errDone.Set(); else if (!finished) onLine(e.Data); };
+
+            proc.Start();
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+
+            var elapsed = Stopwatch.StartNew();
+            while (!proc.WaitForExit(250))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    finished = true;
+                    KillProcessTree(proc.Id);
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                if (timeoutMs > 0 && elapsed.ElapsedMilliseconds > timeoutMs)
+                {
+                    finished = true;
+                    KillProcessTree(proc.Id);
+                    throw new TimeoutException();
+                }
+            }
+
+            bool drained = outDone.Wait(2000) & errDone.Wait(2000);
+            finished = true;
+            int exitCode = proc.ExitCode;
+            if (drained) proc.Dispose();
+            return exitCode;
+        }
+
+        // Kills winget and the installer it launched, so a cancelled upgrade leaves nothing behind.
+        private static void KillProcessTree(int pid)
+        {
+            try
+            {
+                using (var kill = Process.Start(new ProcessStartInfo("taskkill.exe", $"/PID {pid} /T /F")
+                       { UseShellExecute = false, CreateNoWindow = true }))
+                    kill?.WaitForExit(5000);
+            }
+            catch { }
         }
 
         // ── Release notes ─────────────────────────────────────────────────────
@@ -150,6 +211,7 @@ namespace frm_winget_upgrade
                                                                           IProgress<string> progress = null)
         {
             string raw     = await RunCommandAsync("upgrade --accept-source-agreements");
+            ThrowIfWingetFailed(raw);
             var    updates = ParseUpgradeOutput(raw, cancellationToken);
 
             // msstore updates are sometimes dropped from the combined multi-source scan above —
@@ -186,12 +248,40 @@ namespace frm_winget_upgrade
                 seenIds.Add(failed.Id);
             }
 
+            if (!seenIds.Contains(VcRedistAioId) && !installedIds.ContainsKey(VcRedistAioId))
+            {
+                var aio = await GetVcRedistAioAsync();
+                if (aio != null) updates.Add(aio);
+            }
+
             updates.RemoveAll(p => ExcludedPackages.IsExcluded(p.Id));
 
             foreach (var pkg in updates)
                 pkg.Track = VersionLockedId.IsMatch(pkg.Id) ? "Version-locked" : string.Empty;
 
             return updates;
+        }
+
+        private const string VcRedistAioId = "abbodi1406.vcredist";
+
+        // One install covers every VC++ runtime (2005–2026, x86/x64); once installed it is tracked
+        // by the regular upgrade scan, so it is only offered here while missing.
+        private async Task<WingetPackage> GetVcRedistAioAsync()
+        {
+            string raw   = await RunCommandAsync($"show --id \"{VcRedistAioId}\" --exact --accept-source-agreements");
+            var    match = Regex.Match(raw, @"^Version:\s*(\S+)", RegexOptions.Multiline);
+            if (!match.Success) return null;
+
+            return new WingetPackage
+            {
+                Name             = "Visual C++ Redistributable AIO",
+                Id               = VcRedistAioId,
+                InstalledVersion = "Not installed",
+                AvailableVersion = match.Groups[1].Value,
+                Source           = "winget",
+                CurrentStatus    = "⬆ Install Available",
+                IsNewInstall     = true
+            };
         }
 
         // The bulk "upgrade" scan silently drops a package when winget's own name-matching
@@ -207,6 +297,7 @@ namespace frm_winget_upgrade
                                                        IProgress<string> progress, CancellationToken cancellationToken)
         {
             string rawInstalled = await RunCommandAsync("list --accept-source-agreements");
+            ThrowIfWingetFailed(rawInstalled);
             var    installed    = ParseInstalledOutput(rawInstalled, cancellationToken);
 
             var installedIds = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
@@ -236,9 +327,11 @@ namespace frm_winget_upgrade
                     try
                     {
                         string query = pkg.Source != "Local Registry"
-                            ? $"list --id \"{pkg.Id}\" --exact --accept-source-agreements"
-                            : $"list \"{pkg.Name}\" --accept-source-agreements";
-                        string raw = await RunCommandAsync(query);
+                            ? (IsTruncated(pkg.Id)
+                                ? $"list --id \"{ToQuery(pkg.Id)}\" --accept-source-agreements"
+                                : $"list --id \"{pkg.Id}\" --exact --accept-source-agreements")
+                            : $"list \"{ToQuery(pkg.Name)}\" --accept-source-agreements";
+                        string raw = await RunCommandAsync(query, RecheckTimeoutMs);
                         return ParseUpgradeOutput(raw, cancellationToken);
                     }
                     finally
@@ -272,7 +365,7 @@ namespace frm_winget_upgrade
             int sepIdx = FindSeparatorAfterHeader(lines, headerIdx);
 
             int posName, posId, posVersion, posAvailable, posSource;
-            ResolveColumns(lines, headerIdx, sepIdx,
+            ResolveColumns(lines, headerIdx, sepIdx, requireAvailable: true,
                 out posName, out posId, out posVersion, out posAvailable, out posSource);
 
             if (posName < 0 || posId < 0 || posVersion < 0 || posAvailable < 0) return result;
@@ -318,6 +411,7 @@ namespace frm_winget_upgrade
         public async Task<List<WingetPackage>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
         {
             string raw = await RunCommandAsync("list --accept-source-agreements");
+            ThrowIfWingetFailed(raw);
             return ParseInstalledOutput(raw, cancellationToken);
         }
 
@@ -335,7 +429,7 @@ namespace frm_winget_upgrade
             int sepIdx = FindSeparatorAfterHeader(lines, headerIdx);
 
             int posName, posId, posVersion, posAvailable, posSource;
-            ResolveColumns(lines, headerIdx, sepIdx,
+            ResolveColumns(lines, headerIdx, sepIdx, requireAvailable: false,
                 out posName, out posId, out posVersion, out posAvailable, out posSource);
 
             if (posName < 0 || posId < 0 || posVersion < 0) return result;
@@ -391,6 +485,30 @@ namespace frm_winget_upgrade
 
         // ── Shared column-detection helpers ───────────────────────────────────
 
+        private static readonly Regex WingetFailure = new Regex(
+            @"Failed when searching source|An unexpected error occurred|0x8[0-9A-Fa-f]{7}",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // A missing/broken winget or an offline source produces no table at all — without this
+        // the empty parse result was reported as "All packages are up to date".
+        private static void ThrowIfWingetFailed(string raw)
+        {
+            if (raw.StartsWith("[ERROR]")) throw new InvalidOperationException(raw.Substring(7).Trim());
+
+            string[] lines = SplitLines(AnsiEscape.Replace(raw, string.Empty));
+            if (FindHeaderLine(lines, requireAvailable: false) >= 0) return;
+
+            var failures = lines.Where(l => WingetFailure.IsMatch(l)).Select(l => l.Trim()).ToList();
+            if (failures.Count == 0) return;
+
+            // msstore is often broken on its own (0x8a150044, followed by a generic error line)
+            // while the winget source answered fine — that alone is not a failed scan.
+            bool onlyMsStore = failures.Any(f => f.IndexOf("msstore", StringComparison.OrdinalIgnoreCase) >= 0) &&
+                               !failures.Any(f => f.StartsWith("Failed when searching source", StringComparison.OrdinalIgnoreCase) &&
+                                                  f.IndexOf("msstore", StringComparison.OrdinalIgnoreCase) < 0);
+            if (!onlyMsStore) throw new InvalidOperationException($"winget: {failures[0]}");
+        }
+
         private static string[] SplitLines(string text) =>
             text.Replace("\r\n", "\n").Replace("\r", "\n")
                 .Split(new[] { '\n' }, StringSplitOptions.None);
@@ -408,6 +526,11 @@ namespace frm_winget_upgrade
                 if (hasName && hasVersion && hasId && (!requireAvailable || hasAvail))
                     return i;
             }
+
+            // Localized winget: no English labels, but the table still has a dashed rule under its header.
+            for (int i = 1; i < lines.Length; i++)
+                if (IsSeparatorLine(lines[i]) && !string.IsNullOrWhiteSpace(lines[i - 1]))
+                    return i - 1;
             return -1;
         }
 
@@ -425,7 +548,7 @@ namespace frm_winget_upgrade
             return -1;
         }
 
-        private static void ResolveColumns(string[] lines, int headerIdx, int sepIdx,
+        private static void ResolveColumns(string[] lines, int headerIdx, int sepIdx, bool requireAvailable,
             out int posName, out int posId, out int posVersion,
             out int posAvailable, out int posSource)
         {
@@ -444,6 +567,42 @@ namespace frm_winget_upgrade
             }
             GetHeaderPositions(lines[headerIdx],
                 out posName, out posId, out posVersion, out posAvailable, out posSource);
+            if (posName >= 0 && posId >= 0 && posVersion >= 0) return;
+
+            // Localized labels: column order is fixed (Name, Id, Version, [Available], Source).
+            var starts = GetColumnStartsFromData(lines, headerIdx, sepIdx);
+            posName = posId = posVersion = posAvailable = posSource = -1;
+            if (starts.Count < 3) return;
+            posName    = starts[0];
+            posId      = starts[1];
+            posVersion = starts[2];
+            if (starts.Count >= 5)  { posAvailable = starts[3]; posSource = starts[4]; }
+            else if (starts.Count == 4)
+            {
+                if (requireAvailable) posAvailable = starts[3];
+                else                  posSource    = starts[3];
+            }
+        }
+
+        // A header word starts a column only if every data row has a blank just before it —
+        // this keeps multi-word labels (e.g. "Phiên bản") from being split into two columns.
+        private static List<int> GetColumnStartsFromData(string[] lines, int headerIdx, int sepIdx)
+        {
+            string header = lines[headerIdx];
+            var data = new List<string>();
+            for (int i = (sepIdx >= 0 ? sepIdx : headerIdx) + 1; i < lines.Length; i++)
+            {
+                if (FooterLine.IsMatch(lines[i])) break;
+                if (!string.IsNullOrWhiteSpace(lines[i]) && !IsSeparatorLine(lines[i])) data.Add(lines[i]);
+            }
+
+            var starts = new List<int>();
+            for (int i = 0; i < header.Length; i++)
+            {
+                if (header[i] == ' ' || (i > 0 && header[i - 1] != ' ')) continue;
+                if (i == 0 || data.All(l => i - 1 >= l.Length || l[i - 1] == ' ')) starts.Add(i);
+            }
+            return starts;
         }
 
         private static List<(int Start, int End)> GetSeparatorSpans(string line)
@@ -516,17 +675,29 @@ namespace frm_winget_upgrade
         public bool RebootRequired { get; private set; }
         public void ResetRebootFlag() => RebootRequired = false;
 
+        // Running Store/MSIX apps (e.g. Windows Terminal) are staged by winget, which reports
+        // success but keeps the old version until the app is closed — so the next scan still lists
+        // them. Tracked here to show "close the app" instead of a seemingly endless re-upgrade.
+        private static readonly Regex AppRestartNeeded = new Regex(
+            "Restart the application to complete the upgrade", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private bool _appRestartNeeded;
+        public HashSet<string> PendingAppRestartIds { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         // ── Upgrade ───────────────────────────────────────────────────────────
 
         public async Task<bool> UpgradePackageAsync(string packageId,
                                                      string source,
                                                      string installedVersion,
                                                      CancellationToken cancellationToken = default,
-                                                     IProgress<string> progress = null)
+                                                     IProgress<string> progress = null,
+                                                     bool isNewInstall = false)
         {
-            var args = new StringBuilder($"upgrade --id \"{packageId}\"");
-            if (IsMsStoreSource(source))      args.Append(" --source msstore");
-            else if (IsRegistryOnlyId(packageId))
+            var args = new StringBuilder(isNewInstall
+                ? $"install --id \"{packageId}\" --exact --source winget"
+                : $"upgrade --id \"{ToQuery(packageId)}\"");
+            if (!isNewInstall && IsMsStoreSource(source)) args.Append(" --source msstore");
+            else if (!isNewInstall && IsRegistryOnlyId(packageId))
             {
                 // Registry-only entry (ARP\...): with no source winget also queries msstore, which
                 // errors out (0x8a150044) on machines where that source is broken. Pinning it to
@@ -537,14 +708,74 @@ namespace frm_winget_upgrade
             if (AppSettings.ForceInstall)     args.Append(" --force");
             if (AppSettings.AcceptAgreements) args.Append(" --accept-package-agreements --accept-source-agreements");
 
+            _appRestartNeeded = false;
             var (ok, ambiguous) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
-            if (ok || !ambiguous || string.IsNullOrWhiteSpace(installedVersion)) return ok;
+            if (!ok && ambiguous && !string.IsNullOrWhiteSpace(installedVersion))
+            {
+                progress?.Report($"Multiple installed versions matched — retrying with --version \"{installedVersion}\"…");
+                args.Append($" --version \"{installedVersion}\"");
+                (ok, _) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+            }
 
-            progress?.Report($"Multiple installed versions matched — retrying with --version \"{installedVersion}\"…");
-            args.Append($" --version \"{installedVersion}\"");
-            var (retryOk, _) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
-            return retryOk;
+            if (ok && _appRestartNeeded && ReleaseStalePackageHosts(packageId, progress) > 0)
+            {
+                _appRestartNeeded = false;
+                (ok, _) = await RunWingetOperationAsync(args.ToString(), cancellationToken, progress);
+            }
+
+            if (ok && _appRestartNeeded) PendingAppRestartIds.Add(packageId);
+            else if (ok) PendingAppRestartIds.Remove(packageId);
+            return ok;
         }
+
+        // A Store/MSIX package refuses to update while a COM surrogate (dllhost.exe, e.g. the
+        // "Open in Terminal" shell extension) still has the old version's DLLs loaded — there is
+        // no app window to close. Only dllhost processes holding files of this very package
+        // (MSIX folder name = winget Id, e.g. Microsoft.WindowsTerminal) are stopped — matching
+        // any side-by-side package would also hit shared frameworks such as VCLibs x86/x64.
+        // Explorer respawns the surrogate on demand.
+        private static int ReleaseStalePackageHosts(string packageId, IProgress<string> progress)
+        {
+            const string WindowsApps = @"C:\Program Files\WindowsApps";
+            var staleDirs = new List<string>();
+            try
+            {
+                staleDirs = Directory.GetDirectories(WindowsApps)
+                    .Where(d => string.Equals(Path.GetFileName(d).Split('_')[0], packageId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+            catch { return 0; }
+            if (staleDirs.Count == 0) return 0;
+
+            int stopped = 0;
+            foreach (var host in Process.GetProcessesByName("dllhost"))
+            {
+                using (host)
+                {
+                    try
+                    {
+                        string held = host.Modules.Cast<ProcessModule>()
+                            .Select(m => m.FileName)
+                            .FirstOrDefault(f => staleDirs.Any(d => f.StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase)));
+                        if (held == null) continue;
+
+                        progress?.Report($"Stopping dllhost.exe (PID {host.Id}) holding {Path.GetFileName(held)} so the update can apply…");
+                        host.Kill();
+                        host.WaitForExit(3000);
+                        stopped++;
+                    }
+                    catch { }
+                }
+            }
+            return stopped;
+        }
+
+        // winget cuts over-long table cells with "…". --id without --exact is a substring match,
+        // so the untruncated prefix still finds the package; quotes would break the argument.
+        private static bool IsTruncated(string value) => value?.EndsWith("…") == true;
+
+        private static string ToQuery(string value) =>
+            (value ?? string.Empty).TrimEnd('…').Replace("\"", string.Empty).Trim();
 
         private static bool IsRegistryOnlyId(string id) =>
             id != null && id.StartsWith("ARP\\", StringComparison.OrdinalIgnoreCase);
@@ -559,7 +790,7 @@ namespace frm_winget_upgrade
                                                        CancellationToken cancellationToken = default,
                                                        IProgress<string> progress = null)
         {
-            var args = new StringBuilder($"uninstall --id \"{packageId}\"");
+            var args = new StringBuilder($"uninstall --id \"{ToQuery(packageId)}\"");
             if (AppSettings.SilentMode)       args.Append(" --silent");
             if (AppSettings.ForceInstall)     args.Append(" --force");
             if (AppSettings.AcceptAgreements) args.Append(" --accept-source-agreements");
@@ -605,67 +836,67 @@ namespace frm_winget_upgrade
         {
             return await Task.Run(() =>
             {
-                var psi = new ProcessStartInfo
+                var  gate                 = new object();
+                bool textIndicatesFailure = false;
+                bool ambiguousVersions    = false;
+                bool rebootRequired       = false;
+
+                Action<string> onLine = line =>
                 {
-                    FileName               = Exe,
-                    Arguments              = arguments,
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                    CreateNoWindow         = true,
-                    StandardOutputEncoding = new UTF8Encoding(false, false)
+                    string cleaned = AnsiEscape.Replace(line, string.Empty).Trim();
+                    if (string.IsNullOrEmpty(cleaned) || IsSpinnerFragment(cleaned)) return;
+
+                    lock (gate)
+                    {
+                        // Some installers (e.g. PawnIO) return 3010 = success, reboot required, and
+                        // winget words it "Installer failed with exit code: 3010" — not a real failure.
+                        if (cleaned.IndexOf("exit code: 3010", StringComparison.OrdinalIgnoreCase) >= 0)
+                            rebootRequired = true;
+                        else if (cleaned.IndexOf("failed",                      StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                 cleaned.IndexOf("error",                        StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                 cleaned.IndexOf("different install technology", StringComparison.OrdinalIgnoreCase) >= 0)
+                            textIndicatesFailure = true;
+
+                        if (MultipleVersionsError.IsMatch(cleaned)) ambiguousVersions = true;
+                        if (AppRestartNeeded.IsMatch(cleaned))      _appRestartNeeded = true;
+                    }
+
+                    if (UserScopeElevatedError.IsMatch(cleaned))
+                        progress?.Report("Hint: this package is installed for the current user only. " +
+                                         "winget refuses to change it from an Administrator process — " +
+                                         "run the same winget command from a normal (non-admin) terminal.");
+
+                    progress?.Report(cleaned);
                 };
 
-                try
+                // Big installers (Visual Studio) run for many minutes without printing anything.
+                var started = Stopwatch.StartNew();
+                using (new Timer(_ => progress?.Report(
+                           $"Still running… {(int)started.Elapsed.TotalMinutes} min elapsed (installer is working silently)."),
+                           null, HeartbeatInterval, HeartbeatInterval))
                 {
-                    using (var proc = Process.Start(psi))
+                    int exitCode;
+                    try
                     {
-                        if (proc == null) return (false, false);
+                        exitCode = RunProcess(arguments, onLine, cancellationToken, timeoutMs: 0);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        progress?.Report("Cancelled — winget and its installer were stopped.");
+                        return (false, false);
+                    }
+                    catch (Exception ex)
+                    {
+                        progress?.Report($"[ERROR] {ex.Message}");
+                        return (false, false);
+                    }
 
-                        bool   textIndicatesFailure = false;
-                        bool   ambiguousVersions     = false;
-                        bool   rebootRequired        = false;
-                        string line;
-
-                        while ((line = proc.StandardOutput.ReadLine()) != null)
-                        {
-                            if (cancellationToken.IsCancellationRequested)
-                            {
-                                try { proc.Kill(); } catch { }
-                                return (false, false);
-                            }
-
-                            string cleaned = AnsiEscape.Replace(line, string.Empty).Trim();
-                            if (string.IsNullOrEmpty(cleaned)) continue;
-
-                            // Some installers (e.g. PawnIO) return 3010 = success, reboot required, and
-                            // winget words it "Installer failed with exit code: 3010" — not a real failure.
-                            if (cleaned.IndexOf("exit code: 3010", StringComparison.OrdinalIgnoreCase) >= 0)
-                                rebootRequired = true;
-                            else if (cleaned.IndexOf("failed",                      StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                     cleaned.IndexOf("error",                        StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                     cleaned.IndexOf("different install technology", StringComparison.OrdinalIgnoreCase) >= 0)
-                                textIndicatesFailure = true;
-
-                            if (MultipleVersionsError.IsMatch(cleaned))
-                                ambiguousVersions = true;
-
-                            if (UserScopeElevatedError.IsMatch(cleaned))
-                                progress?.Report("Hint: this package is installed for the current user only. " +
-                                                 "winget refuses to change it from an Administrator process — " +
-                                                 "run the same winget command from a normal (non-admin) terminal.");
-
-                            progress?.Report(cleaned);
-                        }
-
-                        proc.WaitForExit();
-
-                        if (cancellationToken.IsCancellationRequested) return (false, false);
-
+                    lock (gate)
+                    {
                         // Exit code 3010 = success, reboot required (Windows Installer standard).
                         bool success = !textIndicatesFailure &&
-                                       (rebootRequired || proc.ExitCode == 0 || proc.ExitCode == 3010);
-                        if (success && (rebootRequired || proc.ExitCode == 3010))
+                                       (rebootRequired || exitCode == 0 || exitCode == 3010);
+                        if (success && (rebootRequired || exitCode == 3010))
                         {
                             RebootRequired = true;
                             progress?.Report("Installed — a restart is required to finish.");
@@ -673,12 +904,10 @@ namespace frm_winget_upgrade
                         return (success, ambiguousVersions);
                     }
                 }
-                catch (Exception ex)
-                {
-                    progress?.Report($"[ERROR] {ex.Message}");
-                    return (false, false);
-                }
-            }, cancellationToken);
+            });
         }
+
+        // With \r treated as a line break, winget's progress spinner arrives as lone "-", "\", "|", "/" lines.
+        private static bool IsSpinnerFragment(string s) => s.Length == 1 && @"-\|/".IndexOf(s[0]) >= 0;
     }
 }

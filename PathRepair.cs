@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 namespace frm_winget_upgrade
 {
@@ -18,66 +20,91 @@ namespace frm_winget_upgrade
             var fixes = new List<(string, string)>();
             try
             {
-                string raw = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User);
-                if (string.IsNullOrEmpty(raw)) return fixes;
-
-                var entries = raw.Split(';').ToList();
-                bool changed = false;
-
-                for (int i = 0; i < entries.Count; i++)
+                // Read and write the raw registry value: Environment.Get/SetEnvironmentVariable
+                // expands %VARS% on read and writes REG_SZ, permanently flattening entries such as
+                // %USERPROFILE%\... in the user's PATH.
+                using (var key = Registry.CurrentUser.OpenSubKey("Environment", writable: true))
                 {
-                    string entry = entries[i];
-                    if (string.IsNullOrWhiteSpace(entry) || Directory.Exists(entry)) continue;
+                    if (key == null) return fixes;
+                    string raw = key.GetValue("Path", null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
+                    if (string.IsNullOrEmpty(raw)) return fixes;
+                    var kind = key.GetValueKind("Path");
 
-                    string repaired = FindReplacement(entry);
-                    if (repaired == null) continue;
+                    var entries = raw.Split(';').ToList();
+                    for (int i = 0; i < entries.Count; i++)
+                    {
+                        string entry    = entries[i];
+                        string expanded = Environment.ExpandEnvironmentVariables(entry);
+                        if (string.IsNullOrWhiteSpace(entry) || Directory.Exists(expanded)) continue;
 
-                    entries[i] = repaired;
-                    fixes.Add((entry, repaired));
-                    changed = true;
+                        string repaired = FindReplacement(expanded);
+                        if (repaired == null) continue;
+
+                        entries[i] = repaired;
+                        fixes.Add((entry, repaired));
+                    }
+
+                    if (fixes.Count == 0) return fixes;
+
+                    // Drop duplicates the repair may have created, keeping first occurrence.
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    string updated = string.Join(";", entries.Where(e => string.IsNullOrWhiteSpace(e) || seen.Add(e)));
+                    key.SetValue("Path", updated, kind == RegistryValueKind.ExpandString
+                        ? RegistryValueKind.ExpandString : RegistryValueKind.String);
                 }
 
-                if (!changed) return fixes;
-
-                // Drop duplicates the repair may have created, keeping first occurrence.
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                string updated = string.Join(";", entries.Where(e => string.IsNullOrWhiteSpace(e) || seen.Add(e)));
-
-                Environment.SetEnvironmentVariable("Path", updated, EnvironmentVariableTarget.User);
+                BroadcastEnvironmentChange();
 
                 // Make the running process (and anything it launches) see it immediately.
                 string proc = Environment.GetEnvironmentVariable("Path") ?? string.Empty;
                 foreach (var (old, @new) in fixes)
-                    proc = proc.Replace(old, @new);
+                    proc = proc.Replace(Environment.ExpandEnvironmentVariables(old), @new);
                 Environment.SetEnvironmentVariable("Path", proc);
             }
             catch { }
             return fixes;
         }
 
-        // entry: <...>\WinGet\Packages\<PackageDir>\<version-folder>\...\<leaf>
+        // entry: <...>\WinGet\Packages\<PackageDir>\<version-folder>[\sub\path]
+        // The replacement keeps the same sub-path under the newest version folder, so an
+        // unrelated folder that merely shares the leaf name (e.g. "bin") is never picked.
         private static string FindReplacement(string entry)
         {
             int idx = entry.IndexOf(PackagesMarker, StringComparison.OrdinalIgnoreCase);
             if (idx < 0) return null;
 
-            string afterMarker = entry.Substring(idx + PackagesMarker.Length);
-            int slash = afterMarker.IndexOf('\\');
-            if (slash <= 0) return null;
+            string[] parts = entry.Substring(idx + PackagesMarker.Length)
+                                  .Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2) return null;
 
-            string packageDir = entry.Substring(0, idx + PackagesMarker.Length + slash);
+            string packageDir = entry.Substring(0, idx + PackagesMarker.Length) + parts[0];
             if (!Directory.Exists(packageDir)) return null;
 
-            string leaf = Path.GetFileName(entry.TrimEnd('\\'));
-            if (string.IsNullOrEmpty(leaf)) return null;
+            string subPath = string.Join("\\", parts.Skip(2));
 
             try
             {
-                return Directory.EnumerateDirectories(packageDir, leaf, SearchOption.AllDirectories)
+                return Directory.EnumerateDirectories(packageDir)
+                                .Select(versionDir => subPath.Length == 0 ? versionDir : Path.Combine(versionDir, subPath))
+                                .Where(Directory.Exists)
                                 .OrderByDescending(d => Directory.GetLastWriteTimeUtc(d))
                                 .FirstOrDefault();
             }
             catch { return null; }
         }
+
+        private static void BroadcastEnvironmentChange()
+        {
+            try
+            {
+                SendMessageTimeout(new IntPtr(0xFFFF), 0x001A, IntPtr.Zero, "Environment",
+                                   0x0002, 1000, out _);
+            }
+            catch { }
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, string lParam,
+                                                        uint flags, uint timeout, out IntPtr result);
     }
 }

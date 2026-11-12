@@ -28,6 +28,8 @@ namespace frm_winget_upgrade
         private const int COL_STATUS    = 6;   // Updates view
         private const int COL_SOURCE    = 4;   // Installed view (reuses slot 4)
 
+        private const string PENDING_RESTART_STATUS = "↻ Close app to finish";
+
         private const int LOG_MAX_LINES  = 1000;
         private const int LOG_KEEP_LINES = 500;
 
@@ -39,7 +41,9 @@ namespace frm_winget_upgrade
         private          bool                _isBusy;
         private          CancellationTokenSource _cts;
         private          CancellationTokenSource _viewLoadCts;
-        private          Panel               _settingsPanel;
+        private          CancellationTokenSource _scanCts;
+        private          HashSet<string>     _busyTargetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private          Panel              _settingsPanel;
         private          string              _activeView = "Dashboard";
         private          List<WingetPackage> _updatePackages = new List<WingetPackage>();
         private          int                 _contextRowIndex = -1;
@@ -65,6 +69,7 @@ namespace frm_winget_upgrade
         private readonly bool       _startInTray;
         private          NotifyIcon _trayIcon;
         private          bool       _allowExit;
+        private          bool       _exitAfterCancel;
 
         public Form1() : this(false) { }
 
@@ -126,6 +131,7 @@ namespace frm_winget_upgrade
                 InitializeUpdatesGrid();
                 EnableGridDoubleBuffering(packagesGrid);
                 SetupEventHandlers();
+                WarnIfElevatedAsOtherUser();
 
                 if (_startInTray)
                 {
@@ -160,14 +166,25 @@ namespace frm_winget_upgrade
             if (_isBusy)
             {
                 var choice = MessageBox.Show(
-                    "Tác vụ đang diễn ra. Bạn có chắc chắn muốn thoát?",
-                    "Đang thực thi",
+                    "An operation is in progress. Are you sure you want to exit?",
+                    "Operation In Progress",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2);
 
                 if (choice == DialogResult.No) { e.Cancel = true; return; }
-                _cts?.Cancel();
+
+                // Closing right away would leave the upgrade loop writing into disposed controls;
+                // stop winget first and let the loop close the form once it has unwound.
+                if (_cts != null)
+                {
+                    e.Cancel         = true;
+                    _exitAfterCancel = true;
+                    _cts.Cancel();
+                    AddLogEntry("Stopping the current operation before exiting…", ThemeColors.WarningOrange);
+                    SetActionEnabled(false);
+                    return;
+                }
             }
 
             _trayIcon?.Dispose();
@@ -181,7 +198,8 @@ namespace frm_winget_upgrade
             menu.Items.Add("Open Winget Manager", null, (s, e) => RestoreFromTray());
             menu.Items.Add("Check for Updates Now", null, async (s, e) =>
             {
-                await ScanForUpdatesAsync();
+                if (!IsIdle()) return;
+                await RestartScanAsync();
                 NotifyTrayUpdateResult();
             });
             menu.Items.Add(new ToolStripSeparator());
@@ -218,6 +236,43 @@ namespace frm_winget_upgrade
             using (var identity = WindowsIdentity.GetCurrent())
                 return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
         }
+
+        // UAC "over-the-shoulder" elevation (a standard user typing an admin's password) runs the
+        // app as that admin: settings, logs, exclusions, PATH repair and per-user winget packages
+        // then belong to the admin account, not to the person at the keyboard.
+        private void WarnIfElevatedAsOtherUser()
+        {
+            string sessionUser = GetSessionUserName();
+            if (string.IsNullOrEmpty(sessionUser) ||
+                string.Equals(sessionUser, Environment.UserName, StringComparison.OrdinalIgnoreCase)) return;
+
+            AddLogEntry($"⚠ Running as \"{Environment.UserName}\" while \"{sessionUser}\" is signed in — settings, " +
+                        "logs and per-user packages apply to the administrator account, not yours.", ThemeColors.WarningOrange);
+        }
+
+        private static string GetSessionUserName()
+        {
+            IntPtr buffer = IntPtr.Zero;
+            try
+            {
+                const int WTS_CURRENT_SESSION = -1, WTSUserName = 5;
+                if (!WTSQuerySessionInformation(IntPtr.Zero, WTS_CURRENT_SESSION, WTSUserName, out buffer, out _))
+                    return null;
+                return System.Runtime.InteropServices.Marshal.PtrToStringUni(buffer);
+            }
+            catch { return null; }
+            finally
+            {
+                if (buffer != IntPtr.Zero) WTSFreeMemory(buffer);
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("wtsapi32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern bool WTSQuerySessionInformation(IntPtr server, int sessionId, int infoClass,
+                                                              out IntPtr buffer, out int bytesReturned);
+
+        [System.Runtime.InteropServices.DllImport("wtsapi32.dll")]
+        private static extern void WTSFreeMemory(IntPtr memory);
 
         private static void TryRestartAsAdministrator(bool startInTray)
         {
@@ -527,7 +582,7 @@ namespace frm_winget_upgrade
                 string.IsNullOrEmpty(link) ? null : "Open link", "Close");
 
             if (choice == DialogResult.Yes && !string.IsNullOrEmpty(link))
-                Process.Start(new ProcessStartInfo(link) { UseShellExecute = true });
+                OpenUrl(link);
         }
 
         private void ExcludeRow(int rowIndex)
@@ -545,24 +600,26 @@ namespace frm_winget_upgrade
         private const string FEEDBACK_URL =
             "https://docs.google.com/forms/d/e/1FAIpQLSeo-lrn9p7d1iRsUXW1JCWRhnNCeTpYmA9DSRbewbb5iHnbmA/viewform?usp=dialog";
 
+        private void OpenFeedbackForm() => OpenUrl(FEEDBACK_URL);
+
         // Shell-executing a URL from an elevated process can fail when the default browser
         // handler isn't registered for the admin token; explorer.exe resolves it in the user's shell.
-        private void OpenFeedbackForm()
+        private void OpenUrl(string url)
         {
             try
             {
-                Process.Start(new ProcessStartInfo(FEEDBACK_URL) { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
             }
             catch
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo("explorer.exe", FEEDBACK_URL));
+                    Process.Start(new ProcessStartInfo("explorer.exe", url));
                 }
                 catch (Exception ex)
                 {
-                    AddLogEntry($"Could not open the feedback form: {ex.Message}", ThemeColors.ErrorRed);
-                    AddLogEntry($"Open it manually: {FEEDBACK_URL}", ThemeColors.InfoBlue);
+                    AddLogEntry($"Could not open the link: {ex.Message}", ThemeColors.ErrorRed);
+                    AddLogEntry($"Open it manually: {url}", ThemeColors.InfoBlue);
                 }
             }
         }
@@ -575,16 +632,29 @@ namespace frm_winget_upgrade
                 NavigateTo("Dashboard", "Overview of your package management system");
             }
 
-            _viewLoadCts?.Cancel();
-            _viewLoadCts?.Dispose();
-            _viewLoadCts = new CancellationTokenSource();
-            await ScanForUpdatesAsync(_viewLoadCts.Token);
+            await RestartScanAsync();
+        }
+
+        // Scans use their own token: switching tabs must not abort a scan in progress.
+        private async Task RestartScanAsync()
+        {
+            _scanCts?.Cancel();
+            _scanCts = new CancellationTokenSource();
+            await ScanForUpdatesAsync(_scanCts.Token);
         }
 
         private void BtnRefresh_Click(object sender, EventArgs e) => RefreshGridDisplay();
 
         private async void BtnAction_Click(object sender, EventArgs e)
         {
+            if (_cts != null)
+            {
+                _cts.Cancel();
+                AddLogEntry("Cancelling — stopping winget and its installer…", ThemeColors.WarningOrange);
+                SetActionEnabled(false);
+                return;
+            }
+
             if (_activeView == "Installed Packages")
                 await ExecuteSelectedUninstallsAsync();
             else
@@ -632,14 +702,27 @@ namespace frm_winget_upgrade
 
         // ── Scan for updates ──────────────────────────────────────────────────
 
+        private bool IsUpdatesView => _activeView == "Dashboard" || _activeView == "Available Updates";
+
+        // Controls are locked for every scan/load/upgrade/uninstall; actions that run winget
+        // themselves must not start alongside one of those.
+        private bool IsIdle()
+        {
+            if (!_isBusy && btnCheckUpdates.Enabled) return true;
+            AddLogEntry("Please wait — another operation is still running.", ThemeColors.WarningOrange);
+            return false;
+        }
+
         private async Task ScanForUpdatesAsync(CancellationToken ct = default)
         {
-            string viewAtStart = _activeView;
-
             SetControlsEnabled(false);
-            SetActionEnabled(false);
-            packagesGrid.Rows.Clear();
-            _allPackages.Clear();
+            _updatePackages = new List<WingetPackage>();
+            if (IsUpdatesView)
+            {
+                SetActionEnabled(false);
+                packagesGrid.Rows.Clear();
+                _allPackages = _updatePackages;
+            }
             UpdateProgress(0);
             AddLogEntry("Scanning for available updates via winget…", ThemeColors.InfoBlue);
 
@@ -647,21 +730,27 @@ namespace frm_winget_upgrade
             {
                 var progress = new Progress<string>(line => AddLogEntry(line, ThemeColors.InfoBlue));
                 var packages = await _service.GetAvailableUpdatesAsync(ct, progress);
+                if (IsDisposed) return;
 
-                if (_activeView != viewAtStart) return;
+                _service.PendingAppRestartIds.IntersectWith(packages.Select(p => p.Id));
+                foreach (var pkg in packages.Where(p => _service.PendingAppRestartIds.Contains(p.Id)))
+                    pkg.CurrentStatus = PENDING_RESTART_STATUS;
 
-                _allPackages    = packages;
                 _updatePackages = packages;
+                if (IsUpdatesView) _allPackages = packages;
 
-                if (_allPackages.Count == 0)
+                if (packages.Count == 0)
                 {
                     AddLogEntry("All packages are up to date.", ThemeColors.SuccessGreen);
                 }
                 else
                 {
-                    PopulateGrid(_allPackages);
-                    AddLogEntry($"{_allPackages.Count} update(s) available.", ThemeColors.SuccessGreen);
-                    SetActionEnabled(true);
+                    AddLogEntry($"{packages.Count} update(s) available.", ThemeColors.SuccessGreen);
+                    if (IsUpdatesView)
+                    {
+                        PopulateGrid(packages);
+                        SetActionEnabled(true);
+                    }
                 }
 
                 UpdateProgress(100);
@@ -711,12 +800,16 @@ namespace frm_winget_upgrade
 
             AddLogEntry($"Downloading update {info.TagName}…", ThemeColors.InfoBlue);
             SetControlsEnabled(false);
+            // In tray mode FormClosing would just hide the window, and the swap script waits
+            // for this process to exit before replacing the EXE.
+            _allowExit = true;
             try
             {
                 await _updateService.DownloadAndApplyUpdateAsync(info, new Progress<int>(UpdateProgress));
             }
             catch (Exception ex)
             {
+                _allowExit = false;
                 AddLogEntry($"Update failed: {ex.Message}", ThemeColors.ErrorRed);
                 MessageBox.Show($"Update failed:\n\n{ex.Message}", "Update Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -743,6 +836,7 @@ namespace frm_winget_upgrade
             try
             {
                 var packages = await _service.GetInstalledPackagesAsync(ct);
+                if (IsDisposed) return;
 
                 // User navigated away while scanning — abort to prevent column-mismatch exceptions.
                 if (_activeView != viewAtStart) return;
@@ -785,7 +879,7 @@ namespace frm_winget_upgrade
                 bool   isLocked   = !string.IsNullOrEmpty(pkg.Track);
                 string trackText  = isLocked ? "🔒 Version-locked" : string.Empty;
 
-                int idx = packagesGrid.Rows.Add(false, pkg.Name, pkg.Id,
+                int idx = packagesGrid.Rows.Add(_isBusy && _busyTargetIds.Contains(pkg.Id), pkg.Name, pkg.Id,
                                                 pkg.InstalledVersion, pkg.AvailableVersion,
                                                 trackText, pkg.CurrentStatus);
                 ApplyStatusCellStyle(idx, pkg.CurrentStatus, back, fore);
@@ -801,7 +895,7 @@ namespace frm_winget_upgrade
             packagesGrid.Rows.Clear();
             foreach (var pkg in packages)
             {
-                int idx = packagesGrid.Rows.Add(false, pkg.Name, pkg.Id,
+                int idx = packagesGrid.Rows.Add(_isBusy && _busyTargetIds.Contains(pkg.Id), pkg.Name, pkg.Id,
                                                 pkg.InstalledVersion, pkg.Source);
 
                 // Set immediately (not only in CellFormatting) so a row never scrolled
@@ -839,7 +933,7 @@ namespace frm_winget_upgrade
                 packagesGrid.Invoke(new Action(() => ApplyStatusCellStyle(rowIndex, text, back, fore)));
                 return;
             }
-            if (rowIndex < 0 || rowIndex >= packagesGrid.Rows.Count) return;
+            if (!IsUpdatesView || rowIndex < 0 || rowIndex >= packagesGrid.Rows.Count) return;
 
             var cell             = packagesGrid.Rows[rowIndex].Cells[COL_STATUS];
             cell.Value           = text;
@@ -850,7 +944,7 @@ namespace frm_winget_upgrade
 
         private void SetPackageStatus(int rowIndex, string packageId, string statusText, Color back, Color fore)
         {
-            var pkg = _allPackages.FirstOrDefault(p => p.Id == packageId);
+            var pkg = _updatePackages.FirstOrDefault(p => p.Id == packageId);
             if (pkg != null) pkg.CurrentStatus = statusText;
             ApplyStatusCellStyle(rowIndex, statusText, back, fore);
         }
@@ -859,6 +953,7 @@ namespace frm_winget_upgrade
         {
             if (status?.StartsWith("✓") == true) return (ThemeColors.SuccessGreen,  Color.Black);
             if (status?.StartsWith("✗") == true) return (ThemeColors.ErrorRed,       Color.White);
+            if (status?.StartsWith("↻") == true) return (ThemeColors.WarningOrange, Color.Black);
             if (status?.Contains("Upgrading")    == true ||
                 status?.Contains("Uninstalling") == true ||
                 status?.Contains("⏳")           == true)
@@ -868,7 +963,7 @@ namespace frm_winget_upgrade
 
         private void PackagesGrid_HeaderClick(object sender, DataGridViewCellMouseEventArgs e)
         {
-            if (e.ColumnIndex != COL_SELECT) return;
+            if (e.ColumnIndex != COL_SELECT || packagesGrid.ReadOnly) return;
             if (packagesGrid.Rows.Count == 0) return;
 
             bool allChecked = packagesGrid.Rows
@@ -942,11 +1037,13 @@ namespace frm_winget_upgrade
 
             _cts     = new CancellationTokenSource();
             _isBusy  = true;
+            _busyTargetIds = new HashSet<string>(targets.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
             var token = _cts.Token;
 
             _currentLogFilePath = _updateLogFilePath;
             _service.ResetRebootFlag();
             SetControlsEnabled(false);
+            ConfigureActionButtonForView(_activeView);
             SetActionEnabled(false);
             UpdateProgress(0);
             AddLogEntry($"Starting upgrade for {targets.Count} package(s)…", ThemeColors.InfoBlue);
@@ -967,7 +1064,7 @@ namespace frm_winget_upgrade
 
                     AddLogEntry($"→ {pkg.Name}  [{pkg.Id}]", ThemeColors.InfoBlue);
 
-                    bool ok = await _service.UpgradePackageAsync(pkg.Id, pkg.Source, pkg.InstalledVersion, token, new Progress<string>(AppendRawLog));
+                    bool ok = await _service.UpgradePackageAsync(pkg.Id, pkg.Source, pkg.InstalledVersion, token, new Progress<string>(AppendRawLog), pkg.IsNewInstall);
 
                     if (token.IsCancellationRequested) { wasCancelled = true; break; }
 
@@ -976,9 +1073,18 @@ namespace frm_winget_upgrade
                     {
                         succeeded++;
                         FailedUpgrades.Remove(pkg.Id);
-                        if (rowIdx >= 0)
-                            SetPackageStatus(rowIdx, pkg.Id, "✓ Done", ThemeColors.SuccessGreen, Color.Black);
-                        AddLogEntry($"✓ {pkg.Name} — upgraded successfully.", ThemeColors.SuccessGreen);
+                        if (_service.PendingAppRestartIds.Contains(pkg.Id))
+                        {
+                            if (rowIdx >= 0)
+                                SetPackageStatus(rowIdx, pkg.Id, PENDING_RESTART_STATUS, ThemeColors.WarningOrange, Color.Black);
+                            AddLogEntry($"✓ {pkg.Name} — staged. Close {pkg.Name} completely to finish the upgrade.", ThemeColors.WarningOrange);
+                        }
+                        else
+                        {
+                            if (rowIdx >= 0)
+                                SetPackageStatus(rowIdx, pkg.Id, "✓ Done", ThemeColors.SuccessGreen, Color.Black);
+                            AddLogEntry($"✓ {pkg.Name} — upgraded successfully.", ThemeColors.SuccessGreen);
+                        }
                     }
                     else
                     {
@@ -1003,6 +1109,9 @@ namespace frm_winget_upgrade
                 _cts = null;
             }
 
+            if (_exitAfterCancel) { _allowExit = true; Close(); return; }
+            ConfigureActionButtonForView(_activeView);
+
             if (succeeded > 0)
             {
                 foreach (var (oldPath, newPath) in await Task.Run(() => PathRepair.RepairUserPath()))
@@ -1015,12 +1124,7 @@ namespace frm_winget_upgrade
             FinishBulkOperation("upgrade", succeeded, failed, wasCancelled, targets.Count);
 
             if (!wasCancelled && succeeded > 0)
-            {
-                _viewLoadCts?.Cancel();
-                _viewLoadCts?.Dispose();
-                _viewLoadCts = new CancellationTokenSource();
-                await ScanForUpdatesAsync(_viewLoadCts.Token);
-            }
+                await RestartScanAsync();
         }
 
         // ── Uninstall selected packages ───────────────────────────────────────
@@ -1049,10 +1153,12 @@ namespace frm_winget_upgrade
 
             _cts    = new CancellationTokenSource();
             _isBusy = true;
+            _busyTargetIds = new HashSet<string>(targets.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
             var token = _cts.Token;
 
             _currentLogFilePath = _uninstallLogFilePath;
             SetControlsEnabled(false);
+            ConfigureActionButtonForView(_activeView);
             SetActionEnabled(false);
             UpdateProgress(0);
             AddLogEntry($"Starting uninstall for {targets.Count} package(s)…", ThemeColors.WarningOrange);
@@ -1105,6 +1211,9 @@ namespace frm_winget_upgrade
                 _cts.Dispose();
                 _cts = null;
             }
+
+            if (_exitAfterCancel) { _allowExit = true; Close(); return; }
+            ConfigureActionButtonForView(_activeView);
 
             FinishBulkOperation("uninstall", succeeded, failed, wasCancelled, targets.Count);
             _currentLogFilePath = _updateLogFilePath;
@@ -1210,7 +1319,7 @@ namespace frm_winget_upgrade
                 return;
             }
             // Both mutations run on the UI thread so _allPackages and the grid stay in sync.
-            int idx = FindRowIndexById(packageId);
+            int idx = _activeView == "Installed Packages" ? FindRowIndexById(packageId) : -1;
             if (idx >= 0) packagesGrid.Rows.RemoveAt(idx);
 
             var match = _allPackages.FirstOrDefault(p =>
@@ -1227,7 +1336,7 @@ namespace frm_winget_upgrade
                 packagesGrid.Invoke(new Action(() => SetInstalledRowStatus(rowIndex, text, back, fore)));
                 return;
             }
-            if (rowIndex < 0 || rowIndex >= packagesGrid.Rows.Count) return;
+            if (_activeView != "Installed Packages" || rowIndex < 0 || rowIndex >= packagesGrid.Rows.Count) return;
 
             // In installed view, COL_SOURCE (slot 4) holds source — write a transient status there.
             var cell             = packagesGrid.Rows[rowIndex].Cells[COL_SOURCE];
@@ -1241,11 +1350,16 @@ namespace frm_winget_upgrade
 
         private void SetControlsEnabled(bool enabled)
         {
+            if (IsDisposed) return;
             if (this.InvokeRequired) { this.Invoke(new Action(() => SetControlsEnabled(enabled))); return; }
+            // A view load started by tab switching must not unlock controls mid upgrade/uninstall.
+            if (enabled && _isBusy) return;
+            if (!enabled && _elapsedTimer.Enabled) return;
             btnCheckUpdates.Enabled = enabled;
             btnRefresh.Enabled      = enabled;
             searchBox.Enabled       = enabled;
-            packagesGrid.Enabled    = enabled;
+            // ReadOnly rather than Enabled: a disabled grid cannot be scrolled while an operation runs.
+            packagesGrid.ReadOnly   = !enabled;
 
             // Every long-running operation (scan, load, upgrade, uninstall) brackets itself
             // with SetControlsEnabled(false)/(true) — one place to drive the elapsed clock.
@@ -1271,15 +1385,23 @@ namespace frm_winget_upgrade
 
         private void SetActionEnabled(bool enabled)
         {
-            if (_btnAction == null) return;
+            if (_btnAction == null || _btnAction.IsDisposed) return;
             if (_btnAction.InvokeRequired) { _btnAction.Invoke(new Action(() => SetActionEnabled(enabled))); return; }
-            _btnAction.Enabled = enabled;
+            // While an upgrade/uninstall runs the button is its Cancel button; otherwise switching tabs
+            // mid-operation (which rebuilds the grid) must not unlock it.
+            _btnAction.Enabled = _cts != null ? !_cts.IsCancellationRequested : enabled && !_isBusy;
         }
 
         private void ConfigureActionButtonForView(string view)
         {
             if (_btnAction == null) return;
-            if (view == "Installed Packages")
+            if (_cts != null)
+            {
+                _btnAction.Text      = "⏹  Cancel";
+                _btnAction.FillColor = ThemeColors.WarningOrange;
+                _btnAction.ForeColor = Color.Black;
+            }
+            else if (view == "Installed Packages")
             {
                 _btnAction.Text      = "🗑  Uninstall Selected";
                 _btnAction.FillColor = ThemeColors.ErrorRed;
@@ -1547,14 +1669,22 @@ namespace frm_winget_upgrade
             var btnResetCache = BuildSettingsButton("🔄  Reset Winget Cache", new Point(0, y));
             btnResetCache.Click += async (s, e) =>
             {
+                if (!IsIdle()) return;
                 btnResetCache.Enabled = false;
+                _isBusy = true;
+                SetControlsEnabled(false);
                 AddLogEntry("Resetting winget sources…", ThemeColors.WarningOrange);
-                bool ok = await _service.ResetSourcesAsync(CancellationToken.None, new Progress<string>(AppendRawLog));
-                if (!IsDisposed)
+                try
                 {
+                    bool ok = await _service.ResetSourcesAsync(CancellationToken.None, new Progress<string>(AppendRawLog));
                     AddLogEntry(ok ? "✓ Sources reset successfully." : "✗ Source reset failed.",
                                 ok ? ThemeColors.SuccessGreen : ThemeColors.ErrorRed);
-                    btnResetCache.Enabled = true;
+                }
+                finally
+                {
+                    _isBusy = false;
+                    SetControlsEnabled(true);
+                    if (!btnResetCache.IsDisposed) btnResetCache.Enabled = true;
                 }
             };
             _settingsPanel.Controls.Add(btnResetCache);
@@ -1562,6 +1692,7 @@ namespace frm_winget_upgrade
             var btnCheckAppUpdate = BuildSettingsButton("⬆️  Check for App Updates", new Point(232, y));
             btnCheckAppUpdate.Click += async (s, e) =>
             {
+                if (!IsIdle()) return;
                 btnCheckAppUpdate.Enabled = false;
                 AddLogEntry("Checking for app updates…", ThemeColors.InfoBlue);
                 await CheckForAppUpdateAsync(silent: false);
@@ -1573,10 +1704,18 @@ namespace frm_winget_upgrade
             var btnClearLog = BuildSettingsButton("🧹  Clear Log History", new Point(0, y));
             btnClearLog.Click += (s, e) =>
             {
-                lock (_logFileLock)
+                try
                 {
-                    if (File.Exists(_updateLogFilePath))    File.Delete(_updateLogFilePath);
-                    if (File.Exists(_uninstallLogFilePath)) File.Delete(_uninstallLogFilePath);
+                    lock (_logFileLock)
+                    {
+                        if (File.Exists(_updateLogFilePath))    File.Delete(_updateLogFilePath);
+                        if (File.Exists(_uninstallLogFilePath)) File.Delete(_uninstallLogFilePath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddLogEntry($"Could not delete the log file (is it open elsewhere?): {ex.Message}", ThemeColors.ErrorRed);
+                    return;
                 }
                 // ReadOnly is briefly lifted — same pattern as TrimLogBuffer.
                 logOutput.ReadOnly = false;
@@ -1830,6 +1969,7 @@ namespace frm_winget_upgrade
 
         public void AddLogEntry(string message, Color color)
         {
+            if (logOutput.IsDisposed) return;
             if (logOutput.InvokeRequired) { logOutput.BeginInvoke(new Action(() => AddLogEntry(message, color))); return; }
 
             string formatted = $"[{DateTime.Now:HH:mm:ss}] {message}";
@@ -1845,6 +1985,7 @@ namespace frm_winget_upgrade
 
         public void UpdateProgress(int value)
         {
+            if (updateProgressBar.IsDisposed) return;
             if (updateProgressBar.InvokeRequired) { updateProgressBar.Invoke(new Action(() => UpdateProgress(value))); return; }
             int v = Math.Max(0, Math.Min(value, 100));
             updateProgressBar.Value = v;
