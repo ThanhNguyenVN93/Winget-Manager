@@ -6,6 +6,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.7] — 2026-11-12
+
+### Added
+- **Cancel button** — while upgrading/uninstalling, the action button becomes *⏹ Cancel* and stops winget together with the installer it launched
+- **Visual C++ Redistributable AIO** — offered as *Install Available* when it isn't installed
+- **"Still running…" log line** every 2 minutes for installers that work silently (e.g. Visual Studio)
+- Store/MSIX apps that need a restart to finish (e.g. Windows Terminal) show *↻ Close app to finish*; the background shell-extension host holding the old version is stopped and the upgrade retried automatically
+
+### Fixed
+- App froze during large installs (Visual Studio) when the installer kept winget's output pipe open
+- Switching tabs stopped the running scan and discarded its results
+- After switching tabs mid-upgrade, the Upgrade button lit up while the checkboxes were locked; the list could not be scrolled during an operation
+- Closing the window during an upgrade could show a fatal error
+- A missing winget or failed winget source was reported as "All packages are up to date"
+- Scans could hang forever (now time out); localized winget output and truncated ids/names are parsed correctly
+- Tray *Check for Updates Now*, *Reset Winget Cache* and *Check for App Updates* could run alongside an upgrade
+- Self-update did not apply while running in the system tray
+- *What's new → Open link* and *Clear Log History* could crash the app
+- PATH repair no longer flattens `%VARIABLES%` in the user PATH
+- Exit confirmation dialog shown in Vietnamese
+
+---
+
 ## [1.4.6] — 2026-11-05
 
 ### Added
