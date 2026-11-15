@@ -144,6 +144,7 @@ namespace frm_winget_upgrade
                 // Check the app itself first — if the user accepts, DownloadAndApplyUpdateAsync
                 // exits the process before we'd ever reach the package scan below, so there's
                 // no point scanning winget packages just to throw the results away on restart.
+                await ShowWhatsNewIfUpdatedAsync();
                 await CheckForAppUpdateAsync(silent: true);
                 await ScanForUpdatesAsync();
             }
@@ -767,6 +768,24 @@ namespace frm_winget_upgrade
         }
 
         // ── App self-update ───────────────────────────────────────────────────
+
+        // Not called in tray mode, so the dialog waits until the window is first opened normally.
+        private async Task ShowWhatsNewIfUpdatedAsync()
+        {
+            var current  = UpdateService.CurrentVersion;
+            var previous = LastRunVersion.Get();
+            LastRunVersion.Set(current);
+            if (previous == null || previous >= current) return;
+
+            string notes;
+            try { notes = await _updateService.GetReleaseNotesAsync(current); }
+            catch { return; }
+            if (string.IsNullOrWhiteSpace(notes) || IsDisposed) return;
+
+            AddLogEntry($"Updated to Winget Manager v{current.ToString(3)}.", ThemeColors.SuccessGreen);
+            ReleaseNotesDialog.Show(this, "What's new", $"Winget Manager updated to v{current.ToString(3)}",
+                                    notes, null, "Close");
+        }
 
         private async Task CheckForAppUpdateAsync(bool silent)
         {
