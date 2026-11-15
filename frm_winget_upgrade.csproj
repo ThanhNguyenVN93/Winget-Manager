@@ -62,6 +62,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AppSettings.cs" />
+    <Compile Include="CapCutCleanup.cs" />
     <Compile Include="DonateSettings.cs" />
     <Compile Include="ExcludedPackages.cs" />
     <Compile Include="FailedUpgrades.cs" />
