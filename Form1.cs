@@ -1048,9 +1048,10 @@ namespace frm_winget_upgrade
             UpdateProgress(0);
             AddLogEntry($"Starting upgrade for {targets.Count} package(s)…", ThemeColors.InfoBlue);
 
-            int  succeeded    = 0;
-            int  failed       = 0;
-            bool wasCancelled = false;
+            int  succeeded      = 0;
+            int  failed         = 0;
+            bool wasCancelled   = false;
+            bool capCutUpgraded = false;
 
             try
             {
@@ -1084,6 +1085,7 @@ namespace frm_winget_upgrade
                             if (rowIdx >= 0)
                                 SetPackageStatus(rowIdx, pkg.Id, "✓ Done", ThemeColors.SuccessGreen, Color.Black);
                             AddLogEntry($"✓ {pkg.Name} — upgraded successfully.", ThemeColors.SuccessGreen);
+                            capCutUpgraded |= CapCutCleanup.IsCapCut(pkg.Id);
                         }
                     }
                     else
@@ -1118,6 +1120,9 @@ namespace frm_winget_upgrade
                     AddLogEntry($"PATH repaired: {oldPath} → {newPath}", ThemeColors.WarningOrange);
             }
 
+            if (capCutUpgraded && !IsDisposed)
+                LogCapCutCleanup(await Task.Run(() => CapCutCleanup.RemoveOldVersions()));
+
             if (_service.RebootRequired && !IsDisposed)
                 AddLogEntry("⚠ A restart is required to finish installing one or more packages.", ThemeColors.WarningOrange);
 
@@ -1125,6 +1130,21 @@ namespace frm_winget_upgrade
 
             if (!wasCancelled && succeeded > 0)
                 await RestartScanAsync();
+        }
+
+        private void LogCapCutCleanup(CapCutCleanup.Result r)
+        {
+            if (r.SkipReason != null)
+            {
+                AddLogEntry($"CapCut cleanup skipped: {r.SkipReason}.", ThemeColors.WarningOrange);
+                return;
+            }
+            foreach (var (name, mb) in r.Deleted)
+                AddLogEntry($"CapCut: removed old version {name} ({mb:0.#} MB).", ThemeColors.SuccessGreen);
+            foreach (var (name, error) in r.Failed)
+                AddLogEntry($"CapCut: could not remove {name} — {error}", ThemeColors.WarningOrange);
+            if (r.Deleted.Count > 0)
+                AddLogEntry($"CapCut cleanup freed {r.FreedMB:0.#} MB.", ThemeColors.SuccessGreen);
         }
 
         // ── Uninstall selected packages ───────────────────────────────────────

@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.9] — 2026-11-15
+
+### Added
+- **CapCut cleanup** — after CapCut is upgraded, the old version folders it leaves in `%LOCALAPPDATA%\CapCut\Apps` (about 1 GB each) are removed automatically. The installed and newest versions are always kept, and nothing is deleted while CapCut is running or when the installed version can't be confirmed
+
+---
+
 ## [1.4.8] — 2026-11-12
 
 ### Fixed
