@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace frm_winget_upgrade
@@ -64,12 +65,19 @@ namespace frm_winget_upgrade
             }
         }
 
-        private static string Tidy(string body) =>
-            (body ?? string.Empty)
+        private static readonly Regex MarkdownHeading = new Regex(@"^[ \t]*#{1,6}[ \t]*", RegexOptions.Multiline | RegexOptions.Compiled);
+        private static readonly Regex MarkdownBullet  = new Regex(@"^([ \t]*)[-*+][ \t]+",RegexOptions.Multiline | RegexOptions.Compiled);
+
+        private static string Tidy(string body)
+        {
+            string text = (body ?? string.Empty)
                 .Replace("**", string.Empty)
                 .Replace("`", string.Empty)
-                .Replace("\r\n", "\n")
-                .Replace("\n", "\r\n");
+                .Replace("\r\n", "\n");
+            text = MarkdownHeading.Replace(text, string.Empty);
+            text = MarkdownBullet.Replace(text, "$1• ");
+            return text.Trim().Replace("\n", "\r\n");
+        }
 
         private static Button BuildButton(string text, Point location, bool primary) => new Button
         {

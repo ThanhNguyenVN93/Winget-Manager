@@ -807,8 +807,9 @@ namespace frm_winget_upgrade
             }
 
             var choice = ReleaseNotesDialog.Show(this, "Update Available",
-                $"Winget Manager {info.TagName} is available — the app restarts automatically after updating.",
-                string.IsNullOrWhiteSpace(info.Notes) ? "(No release notes provided.)" : info.Notes,
+                $"Winget Manager {info.TagName} is available",
+                "The app restarts automatically after updating.\n\n" +
+                (string.IsNullOrWhiteSpace(info.Notes) ? "(No release notes provided.)" : info.Notes),
                 "Update now", "Later");
 
             if (choice != DialogResult.Yes)

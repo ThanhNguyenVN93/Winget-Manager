@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.11] — 2026-11-15
+
+### Fixed
+- Release notes in the *Update Available* and *What's new* dialogs showed raw markdown (`###`, `-`); headings now show as plain text and list items as bullets
+- The *Update Available* header was cut off; the "restarts automatically" note now appears at the top of the notes instead
+
+---
+
 ## [1.4.10] — 2026-11-15
 
 ### Added
