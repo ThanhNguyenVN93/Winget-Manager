@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.10] — 2026-11-15
+
+### Added
+- **What's new after updating** — the first time the app opens after updating itself, it shows the release notes for the new version. Fresh installs don't show it, and when the app starts hidden in the tray it waits until you open the window
+
+---
+
 ## [1.4.9] — 2026-11-15
 
 ### Added

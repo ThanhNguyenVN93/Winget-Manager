@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Text;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -22,32 +23,23 @@ namespace frm_winget_upgrade
 
     public sealed class UpdateService
     {
-        private const string LatestReleaseApiUrl =
-            "https://api.github.com/repos/ThanhNguyenVN93/Winget-Manager/releases/latest";
+        private const string ReleasesApiUrl =
+            "https://api.github.com/repos/ThanhNguyenVN93/Winget-Manager/releases/";
 
         // GitHub rejects requests without a User-Agent header.
         private const string UserAgent = "WingetManager-UpdateChecker";
 
+        public static Version CurrentVersion => NormalizeVersion(Assembly.GetExecutingAssembly().GetName().Version);
+
         public async Task<UpdateInfo> CheckForUpdateAsync()
         {
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-
-            string json;
-            using (var client = new WebClient())
-            {
-                client.Headers[HttpRequestHeader.UserAgent] = UserAgent;
-                client.Headers[HttpRequestHeader.Accept]     = "application/vnd.github+json";
-                json = await client.DownloadStringTaskAsync(LatestReleaseApiUrl);
-            }
-
-            var data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+            var data = await GetReleaseAsync("latest");
 
             string tagName = data.TryGetValue("tag_name", out var tag) ? tag as string : null;
             if (string.IsNullOrWhiteSpace(tagName)) return null;
             if (!Version.TryParse(tagName.TrimStart('v', 'V'), out Version remoteVersion)) return null;
 
-            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version;
-            if (NormalizeVersion(remoteVersion) <= NormalizeVersion(currentVersion)) return null;
+            if (NormalizeVersion(remoteVersion) <= CurrentVersion) return null;
 
             string downloadUrl = FindExeAssetUrl(data);
             if (string.IsNullOrWhiteSpace(downloadUrl)) return null;
@@ -60,6 +52,26 @@ namespace frm_winget_upgrade
                 HtmlUrl     = data.TryGetValue("html_url", out var url) ? url as string : null,
                 Notes       = data.TryGetValue("body", out var body) ? body as string : null
             };
+        }
+
+        public async Task<string> GetReleaseNotesAsync(Version version)
+        {
+            var data = await GetReleaseAsync($"tags/v{version.ToString(3)}");
+            return data.TryGetValue("body", out var body) ? body as string : null;
+        }
+
+        private static async Task<Dictionary<string, object>> GetReleaseAsync(string path)
+        {
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+
+            using (var client = new WebClient())
+            {
+                client.Headers[HttpRequestHeader.UserAgent] = UserAgent;
+                client.Headers[HttpRequestHeader.Accept]     = "application/vnd.github+json";
+                client.Encoding = Encoding.UTF8;
+                string json = await client.DownloadStringTaskAsync(ReleasesApiUrl + path);
+                return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+            }
         }
 
         private static string FindExeAssetUrl(Dictionary<string, object> release)
